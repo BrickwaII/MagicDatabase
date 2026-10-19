@@ -1,0 +1,3 @@
+{
+  "_comment": "Known deck-to-card mappings used by the migration before Scryfall search. Keys are \"player_id|Deck name\" or just \"Deck name\"; values are exact card names, e.g. \"henry|Tifa\": \"Tifa Lockhart\"."
+}
