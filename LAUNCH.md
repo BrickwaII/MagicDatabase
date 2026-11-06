@@ -35,7 +35,7 @@ Players sign in with Google. You need one OAuth client.
 
 ## 4. Environment variables (≈3 min)
 
-Vercel project → **Settings → Environment Variables**, for Production (and Preview):
+Vercel project → **Settings → Environment Variables**, for **Production** (preview builds can't use Google sign-in, so skip Preview):
 
 | Name | Value |
 | --- | --- |
