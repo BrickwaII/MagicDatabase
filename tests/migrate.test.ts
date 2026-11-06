@@ -263,7 +263,7 @@ Decks:,🟦🟥⬜Kestrel (Bo),🟥⬜🟦Kestrel,⬛Bramble (ana)
       "bo|Kestrel|WUR",
       "cy|Ghost|G",
       "cy|Own (Cy)|B",
-      "cy|Vex(Precon)|WR",
+      "cy|Vex|WR",
     ]);
     const [ana, bo, cy] = seatsOf(0);
     expect(ana).toMatchObject({ player_id: "ana", is_winner: true });
@@ -281,8 +281,8 @@ Decks:,🟦🟥⬜Kestrel (Bo),🟥⬜🟦Kestrel,⬛Bramble (ana)
     expect(res.warnings.filter((w) => w.includes('Borrowed deck "🟩Ghost (Cy)"'))).toHaveLength(1);
   });
 
-  it("keeps other parentheses as part of the nickname", () => {
-    expect(deckOf(seatsOf(1)[1].deck_id)).toMatchObject({ owner_player_id: "cy", name: "Vex(Precon)" });
+  it("moves (Precon) into the deck notes and keeps other parentheses in the nickname", () => {
+    expect(deckOf(seatsOf(1)[1].deck_id)).toMatchObject({ owner_player_id: "cy", name: "Vex", notes: "Precon" });
     expect(deckOf(seatsOf(2)[2].deck_id)).toMatchObject({ owner_player_id: "cy", name: "Own (Cy)" });
   });
 

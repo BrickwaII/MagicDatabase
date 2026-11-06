@@ -3,7 +3,10 @@ import { GUEST_PLAYER_ID, POD_SIZES, type GameWithSeats } from "./schema";
 export interface StatsFilter {
   /** Only count games with these pod sizes; empty = all. */
   podSizes?: number[];
-  /** Only count games tagged with at least one of these brackets; empty = all. */
+  /**
+   * Only count games tagged with at least one of these brackets; empty = all.
+   * Games with no bracket recorded always pass (most imported games have none).
+   */
   brackets?: string[];
   /** Drop games that used any of these additional rules. */
   ignoredRules?: string[];
@@ -29,7 +32,7 @@ export function countedGames(games: GameWithSeats[], filter: StatsFilter = {}) {
       g.status === "approved" &&
       g.result === "won" &&
       (f.podSizes.length === 0 || f.podSizes.includes(g.seats.length)) &&
-      (f.brackets.length === 0 || g.brackets.some((b) => f.brackets.includes(b))) &&
+      (f.brackets.length === 0 || g.brackets.length === 0 || g.brackets.some((b) => f.brackets.includes(b))) &&
       !g.additional_rules.some((r) => f.ignoredRules.includes(r)),
   );
 }

@@ -53,6 +53,12 @@ describe("stats", () => {
     expect(countedGames(games, { ignoredRules: ["planechase"] })).toHaveLength(3);
   });
 
+  it("lets games with no bracket recorded pass the bracket filter", () => {
+    const untagged = game([["a", "da", true], ["b", "db", false], ["c", "dc", false]], { brackets: [] });
+    expect(countedGames([...games, untagged], { brackets: ["4"] })).toHaveLength(2);
+    expect(countedGames([...games, untagged], { brackets: ["5"] })).toHaveLength(1);
+  });
+
   it("tracks per-deck records and last played", () => {
     const db = deckStats(games).find((d) => d.deck_id === "db")!;
     expect(db).toMatchObject({ games: 4, wins: 1, lastPlayed: "2026-02-01" });

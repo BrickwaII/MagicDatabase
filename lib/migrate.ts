@@ -320,7 +320,11 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
     const raw = cell.trim();
     const key = `${owner}|${raw.toLowerCase()}`;
     if (!raw || deckByKey.has(key)) return deckByKey.get(key);
-    const { colors, name } = splitDeckCell(raw);
+    const split = splitDeckCell(raw);
+    const { colors } = split;
+    // "Vex(Precon)" / "Vex (precon)": the deck is "Vex"; "Precon" goes in its notes.
+    const precon = split.name.match(/^(.*\S)\s*\(\s*precon\s*\)$/iu);
+    const name = precon ? precon[1] : split.name;
     const nameKey = `${owner}|${name.toLowerCase()}`;
     const sameName = deckByOwnerName.get(nameKey) ?? [];
     // Same nickname and same colors with the emoji in another order (e.g. 🟦🟥⬜ vs
@@ -341,7 +345,7 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
       name,
       colors: colors || "C",
       bracket: "",
-      notes: "",
+      notes: precon ? "Precon" : "",
       commander_status: "unresolved",
       active: true,
     };
@@ -378,7 +382,8 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
   /**
    * Borrowed decks: a cell ending in "(<another player's name>)", e.g.
    * "🟦🟥⬜Tidus (Sam)" in Alex's column, is Sam's Tidus played by Alex.
-   * Other parentheses ("Vex(Precon)") are part of the nickname.
+   * Other parentheses are part of the nickname, except "(Precon)", which addDeck
+   * strips from the name and records in the deck notes.
    */
   const borrowedFrom = (pilot: string, cell: string) => {
     const m = cell.trim().match(/^(.*\S)\s*\(([^()]+)\)$/u);

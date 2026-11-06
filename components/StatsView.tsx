@@ -131,7 +131,7 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
             </div>
           </div>
           <div>
-            <span className="lbl">Brackets (none picked = all)</span>
+            <span className="lbl">Brackets (none picked = all; games with no bracket always count)</span>
             <div className="chips">
               {BRACKETS.map((b) => (
                 <label key={b} className="chip">
