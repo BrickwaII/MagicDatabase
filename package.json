@@ -22,7 +22,7 @@
     "drizzle-orm": "^0.45.4",
     "google-auth-library": "^9.15.1",
     "next": "^15.5.28",
-    "next-auth": "^4.24.13",
+    "next-auth": "^4.24.15",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "ws": "^8.22.1",
