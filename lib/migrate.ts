@@ -114,17 +114,31 @@ export interface GamesColumns {
   notes: number;
 }
 
+/**
+ * Formula helper columns in the real old sheet, to the right of the data:
+ * "Player #" and "Winner #" (counts/seat of the winner on a game's first row),
+ * and "DateFilled", "Game#Filled", "WinnerFilled", "BracketFilled", ... which
+ * fill values down *across* games. Detection skips them so that e.g. "Game#Filled"
+ * is never taken for the game number and "Winner #" never for the winner.
+ * "SeatNumber" is a helper too: it is derived from row order (and blank on rows
+ * with no player name), so row order is used directly instead.
+ */
+const isHelperColumn = (s: string) => /filled$/.test(s) || /^(player|winner)\s*#$/.test(s) || s === "seatnumber";
+
 export function detectGamesColumns(header: string[]): { cols: Partial<GamesColumns>; headerRow: string[] } {
   const h = header.map((x) => x.trim().toLowerCase());
   const find = (test: (s: string) => boolean, exclude: number[] = []) => {
-    const i = h.findIndex((s, idx) => s && !exclude.includes(idx) && test(s));
+    const i = h.findIndex((s, idx) => s && !isHelperColumn(s) && !exclude.includes(idx) && test(s));
     return i === -1 ? undefined : i;
   };
   const date = find((s) => s.includes("date"));
   const winConditions = find((s) => /win\s*con/.test(s));
   const winner = find((s) => /winner|^won$|^win$|^w$/.test(s), [winConditions ?? -1]);
-  const seat = find((s) => /seat|turn|order|position/.test(s));
-  const gameNo = find((s) => /game/.test(s), [seat ?? -1, date ?? -1]);
+  // The real sheet's player header is "Players (In Turn Order)": that is the
+  // player column, not a seat column. Seat order is then the row order.
+  const seat = find((s) => /seat|turn|order|position/.test(s) && !/player/.test(s));
+  // The real sheet's game-number header is just "#".
+  const gameNo = find((s) => s === "#" || s === "no" || s === "no.") ?? find((s) => /game/.test(s), [seat ?? -1, date ?? -1]);
   return {
     headerRow: header,
     cols: {
@@ -148,6 +162,7 @@ export function findHeaderRow(grid: Grid): number {
   return i === -1 ? 0 : i;
 }
 
+
 // ---------------------------------------------------------------------------
 // Lookup lists from the Data tab
 
@@ -162,16 +177,109 @@ function column(grid: Grid | undefined, test: RegExp): string[] {
     .filter(Boolean);
 }
 
+/**
+ * A "Player | Deck | Bracket | Notes" table anywhere in the first rows of a tab.
+ * Headers must be exactly "Player" and "Deck" (so the Data tab's "Players" list
+ * and DeckDetails' "Player (All Pairs)" helper columns are not picked up).
+ */
+function deckTable(grid: Grid | undefined) {
+  if (!grid) return [];
+  for (let hi = 0; hi < Math.min(grid.length, 5); hi++) {
+    const h = grid[hi].map((c) => c.trim().toLowerCase());
+    const pi = h.indexOf("player");
+    const di = h.indexOf("deck");
+    if (pi === -1 || di === -1) continue;
+    const near = (re: RegExp) => h.findIndex((c, i) => i > di && i <= di + 3 && re.test(c));
+    const bi = near(/^brackets?$/);
+    const ni = near(/^notes?$/);
+    return grid
+      .slice(hi + 1)
+      .map((r) => ({
+        player: (r[pi] ?? "").trim(),
+        deck: (r[di] ?? "").trim(),
+        bracket: bi >= 0 ? (r[bi] ?? "").trim() : "",
+        notes: ni >= 0 ? (r[ni] ?? "").trim() : "",
+      }))
+      .filter((r) => r.player && r.deck);
+  }
+  return [];
+}
+
+function editDistance(a: string, b: string) {
+  const d = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0];
+    d[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const t = d[j];
+      d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = t;
+    }
+  }
+  return d[b.length];
+}
+
+// ---------------------------------------------------------------------------
+// Commander seeds (scripts/commander-seeds.json)
+
+/**
+ * A seed maps a deck nickname to its commander card(s). Keys, tried in order:
+ * "player_id|Deck name", "Deck name|COLORS" (e.g. "Tifa|WRG"), "Deck name".
+ * Values: a card name (looked up on Scryfall later), or a list of
+ * { name, oracle_id } (already confirmed; first is the commander, the rest
+ * partners) which links the deck without any lookup. Keys starting with "_" are comments.
+ */
+export type CommanderSeed = string | { name: string; oracle_id?: string; role?: DeckCommander["role"] }[];
+
+export function seedFor(seeds: Record<string, unknown> | undefined, deck: Pick<Deck, "owner_player_id" | "name" | "colors">) {
+  if (!seeds) return undefined;
+  for (const k of [`${deck.owner_player_id}|${deck.name}`, `${deck.name}|${deck.colors}`, deck.name]) {
+    const v = seeds[k];
+    if (typeof v === "string" || Array.isArray(v)) return v as CommanderSeed;
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 
-export function migrate(old: OldSheet, opts: { commanderSeeds?: Record<string, string> } = {}): MigrationResult {
+export interface MigrateOptions {
+  commanderSeeds?: Record<string, unknown>;
+  /**
+   * The old sheet only writes a bracket when it changes: the "Bracket(s)" cell is
+   * blank for ~95% of games, and runs of "5" end with an explicit "3" (e.g. a 5,5,5
+   * night followed by "3" on the next game). Its own stats read the fill-down
+   * "BracketFilled" helper, i.e. a blank bracket means "same as the previous game".
+   * Default true so stats filtered by bracket match the old sheet.
+   */
+  stickyBrackets?: boolean;
+  /**
+   * Same for "Additional Rules(s)". The old "RulesFilled" helper fills the one
+   * recorded rule (a house rule listed on one early game) down to every
+   * later game, but there is no evidence that is meant (no game ever resets it),
+   * so the default is false: rules are only kept on the game that lists them.
+   */
+  stickyRules?: boolean;
+}
+
+/** "RANDOM_Seat3", "Random_Seat1", "Guest seat 2", "Seat 4" → 3, 1, 2, 4 */
+const seatRef = (v: string) => {
+  const m = v.trim().match(/^(?:(?:random|guest)[\s_-]*)?seat[\s_#-]*(\d+)$/i);
+  return m ? Number(m[1]) : undefined;
+};
+
+export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResult {
   const warnings: string[] = [];
+  const stickyBrackets = opts.stickyBrackets ?? true;
+  const stickyRules = opts.stickyRules ?? false;
 
   // Players: Decks header row + Data tab player list.
+  // The real Decks tab has row labels in column A ("Player:" on the header row,
+  // "Decks:" merged down the rest); those are labels, not a player or a deck.
+  const isLabel = (n: string) => /^(players?|decks?)\s*:?$/i.test(n.trim());
   const playerNames = new Map<string, string>(); // lower name -> display
   const addName = (n: string) => {
     const t = n.trim();
-    if (!t || t.toUpperCase() === GUEST_PLAYER_ID) return;
+    if (!t || isLabel(t) || t.toUpperCase() === GUEST_PLAYER_ID) return;
     if (!playerNames.has(t.toLowerCase())) playerNames.set(t.toLowerCase(), t);
   };
   const deckHeader = old.decks[0] ?? [];
@@ -186,6 +294,9 @@ export function migrate(old: OldSheet, opts: { commanderSeeds?: Record<string, s
     players.push({ player_id: id, display_name: display, email: "", role: "player", active: true });
     idByName.set(lower, id);
   }
+  // Unknown names in Games (not in the Decks header or Data list) are added as
+  // new players with a warning rather than guessed to be a misspelling of a known
+  // player: the real sheet has none, and a wrong merge would corrupt two players' stats.
   const playerId = (name: string) => {
     const t = name.trim();
     if (!t) return "";
@@ -200,23 +311,29 @@ export function migrate(old: OldSheet, opts: { commanderSeeds?: Record<string, s
     return idByName.get(t.toLowerCase())!;
   };
 
-  // Decks: one column per player.
+  // Decks: one column per player. The Decks tab is the deck list; other tabs
+  // (DeckDetails, Data) only annotate decks found here.
   const decks: Deck[] = [];
   const deckByKey = new Map<string, Deck>(); // owner|raw cell (lowercased)
-  const deckByOwnerName = new Map<string, Deck>(); // owner|name (lowercased)
+  const deckByOwnerName = new Map<string, Deck[]>(); // owner|name (lowercased) -> decks
   const addDeck = (owner: string, cell: string) => {
     const raw = cell.trim();
     const key = `${owner}|${raw.toLowerCase()}`;
     if (!raw || deckByKey.has(key)) return deckByKey.get(key);
     const { colors, name } = splitDeckCell(raw);
     const nameKey = `${owner}|${name.toLowerCase()}`;
-    const existing = deckByOwnerName.get(nameKey);
+    const sameName = deckByOwnerName.get(nameKey) ?? [];
+    // Same nickname and same colors with the emoji in another order (e.g. 🟦🟥⬜ vs
+    // 🟥⬜🟦): one deck. Same nickname in other colors is a different deck: the
+    // real sheet has two "Iron Man" decks for one player (🟥 and 🟦🟥).
+    const existing = sameName.find((d) => d.colors === (colors || "C"));
     if (existing) {
       deckByKey.set(key, existing);
       return existing;
     }
-    let id = `d_${owner}_${slugify(name)}`;
-    for (let i = 2; decks.some((d) => d.deck_id === id); i++) id = `d_${owner}_${slugify(name)}-${i}`;
+    const base = `d_${owner}_${slugify(name)}`;
+    let id = decks.some((d) => d.deck_id === base) ? `${base}-${(colors || "C").toLowerCase()}` : base;
+    for (let i = 2; decks.some((d) => d.deck_id === id); i++) id = `${base}-${i}`;
     if (!colors) warnings.push(`Deck "${raw}" (${owner}) has no color emoji; colors left as C.`);
     const deck: Deck = {
       deck_id: id,
@@ -230,29 +347,50 @@ export function migrate(old: OldSheet, opts: { commanderSeeds?: Record<string, s
     };
     decks.push(deck);
     deckByKey.set(key, deck);
-    deckByOwnerName.set(nameKey, deck);
+    deckByOwnerName.set(nameKey, [...sameName, deck]);
     return deck;
   };
+  /**
+   * An owner's existing deck for a cell: exact cell, then same nickname, then a
+   * single same-colored deck whose nickname is a typo (edit distance ≤ 2) or a
+   * longer form ("Yarok" → "Yarok - Wraiths") of it. The real DeckDetails tab has
+   * stale/typo rows like "Yuiko" for "Yuriko" and "Nine-Fingers Keae" for "Keane".
+   */
+  const findOwnDeck = (owner: string, cell: string) => {
+    const raw = cell.trim().toLowerCase();
+    const hit = deckByKey.get(`${owner}|${raw}`);
+    if (hit) return hit;
+    const { colors, name } = splitDeckCell(cell);
+    const n = name.toLowerCase();
+    const byName = (deckByOwnerName.get(`${owner}|${n}`) ?? []).filter((d) => !colors || d.colors === colors);
+    if (byName.length === 1) return byName[0];
+    if (byName.length > 1) return undefined;
+    const near = decks.filter((d) => {
+      if (d.owner_player_id !== owner || (colors && d.colors !== colors)) return false;
+      const dn = d.name.toLowerCase();
+      return (n.length >= 4 && editDistance(dn, n) <= 2) || (n.length >= 4 && dn.startsWith(`${n} `)) || (dn.length >= 4 && n.startsWith(`${dn} `));
+    });
+    if (near.length !== 1) return undefined;
+    const msg = `Deck "${cell.trim()}" (${owner}) read as their "${near[0].name}" (typo or short form).`;
+    if (!warnings.includes(msg)) warnings.push(msg);
+    return near[0];
+  };
   deckHeader.forEach((name, ci) => {
-    if (!name.trim() || name.trim().toUpperCase() === GUEST_PLAYER_ID) return;
+    if (!name.trim() || isLabel(name) || name.trim().toUpperCase() === GUEST_PLAYER_ID) return;
     const owner = playerId(name);
     for (const row of old.decks.slice(1)) if (row[ci]?.trim()) addDeck(owner, row[ci]);
   });
 
-  // DeckDetails: player, deck, bracket, notes.
-  if (old.deckDetails && old.deckDetails.length > 1) {
-    const hh = old.deckDetails[0].map((x) => x.toLowerCase());
-    const pi = hh.findIndex((x) => x.includes("player"));
-    const di = hh.findIndex((x) => x.includes("deck"));
-    const bi = hh.findIndex((x) => x.includes("bracket"));
-    const ni = hh.findIndex((x) => x.includes("note"));
-    for (const r of old.deckDetails.slice(1)) {
-      if (pi < 0 || di < 0 || !r[pi]?.trim() || !r[di]?.trim()) continue;
-      const d = addDeck(playerId(r[pi]), r[di]);
-      if (!d) continue;
-      if (bi >= 0 && r[bi]?.trim()) d.bracket = splitMulti(r[bi]).filter((b) => /^[1-5]$/.test(b)).sort().pop() ?? "";
-      if (ni >= 0 && r[ni]?.trim()) d.notes = r[ni].trim();
+  // DeckDetails and the Data tab's Player/Deck/Bracket table: bracket + notes.
+  for (const r of [...deckTable(old.deckDetails), ...deckTable(old.data)]) {
+    if (!r.bracket && !r.notes) continue;
+    const d = findOwnDeck(playerId(r.player), r.deck);
+    if (!d) {
+      warnings.push(`Deck details for "${r.deck}" (${r.player}) don't match a deck in the Decks tab; ignored.`);
+      continue;
     }
+    if (r.bracket) d.bracket = splitMulti(r.bracket).filter((b) => /^[1-5]$/.test(b)).sort().pop() ?? d.bracket;
+    if (r.notes) d.notes = r.notes;
   }
 
   // Lookups
@@ -271,7 +409,11 @@ export function migrate(old: OldSheet, opts: { commanderSeeds?: Record<string, s
   column(old.data, /win\s*con/i).forEach((n) => lookupId(winConditions, n));
   column(old.data, /rule/i).forEach((n) => lookupId(rules, n));
 
-  // Games: fill down merged cells, group by date + game number.
+  // Games. In the real sheet each game is a block of rows whose Date, #, Winner,
+  // Bracket(s), Win Condition(s), Additional Rules(s) and Notes are merged cells,
+  // which a CSV export / the values API leaves blank except on the block's first
+  // row. So a row with a date or a game # starts a new game and the rows below
+  // belong to it until the next one.
   const hi = findHeaderRow(old.games);
   const { cols } = detectGamesColumns(old.games[hi] ?? []);
   for (const k of ["date", "player"] as const) {
@@ -282,90 +424,156 @@ export function migrate(old: OldSheet, opts: { commanderSeeds?: Record<string, s
   interface Pending {
     date: string;
     no: string;
-    rows: string[][];
+    sheetRow: number;
+    rows: { r: string[]; sheetRow: number }[];
   }
   const groups: Pending[] = [];
+  let cur: Pending | null = null;
   let lastDate = "";
-  let lastNo = "";
   for (const [i, r] of old.games.slice(hi + 1).entries()) {
-    const player = cell(r, "player");
+    const sheetRow = hi + i + 2;
     const rawDate = cell(r, "date");
     const rawNo = cell(r, "gameNo");
-    if (!player) {
-      if (rawDate || rawNo) warnings.push(`Games row ${hi + i + 2}: no player; skipped.`);
+    const hasSeat = Boolean(cell(r, "player") || cell(r, "deck"));
+    const restartsSeats = cols.gameNo === undefined && !rawDate && cell(r, "seat") === "1" && cur && cur.rows.length > 0;
+    if (rawDate || rawNo || restartsSeats) {
+      const date = rawDate ? parseDate(rawDate) : lastDate;
+      if (rawDate && !date) {
+        warnings.push(`Games row ${sheetRow}: unreadable date "${rawDate}"; game skipped.`);
+        cur = null;
+        continue;
+      }
+      if (!date) {
+        warnings.push(`Games row ${sheetRow}: game # "${rawNo}" before any date; skipped.`);
+        cur = null;
+        continue;
+      }
+      cur = { date, no: rawNo, sheetRow, rows: [] };
+      groups.push(cur);
+      lastDate = date;
+    }
+    if (!hasSeat) continue;
+    if (!cur) {
+      warnings.push(`Games row ${sheetRow}: seat before the first game; skipped.`);
       continue;
     }
-    const date = rawDate ? parseDate(rawDate) : lastDate;
-    if (rawDate && !date) {
-      warnings.push(`Games row ${hi + i + 2}: unreadable date "${rawDate}"; skipped.`);
-      continue;
-    }
-    if (rawDate && date !== lastDate && !rawNo) lastNo = "";
-    const no = rawNo || lastNo;
-    const seatNo = cell(r, "seat");
-    const prev = groups[groups.length - 1];
-    // A new game starts when date or game # changes, or seat order restarts at 1.
-    const startsNew = !prev || prev.date !== date || prev.no !== no || (cols.gameNo === undefined && seatNo === "1");
-    if (startsNew) groups.push({ date: date!, no, rows: [r] });
-    else prev.rows.push(r);
-    lastDate = date!;
-    lastNo = no;
+    cur.rows.push({ r, sheetRow });
+  }
+
+  // The real sheet pre-numbers empty games at the bottom (a date and # with no
+  // seats). Those are dropped, with one summary warning.
+  const empty = groups.filter((g) => g.rows.length === 0);
+  if (empty.length) {
+    const label = (g: Pending) => `${g.date}${g.no ? ` #${g.no}` : ""}`;
+    warnings.push(
+      `${empty.length} game slot(s) with no players skipped: ${empty.length <= 3 ? empty.map(label).join(", ") : `${label(empty[0])} … ${label(empty[empty.length - 1])}`}.`,
+    );
   }
 
   const games: Game[] = [];
   const seats: GameSeat[] = [];
   const dayCounter = new Map<string, number>();
-  for (const g of groups) {
-    const first = (k: keyof GamesColumns) => g.rows.map((r) => cell(r, k)).find(Boolean) ?? "";
+  let lastBrackets: string[] = [];
+  let lastRules: string[] = [];
+  for (const g of groups.filter((x) => x.rows.length > 0)) {
+    const first = (k: keyof GamesColumns) => g.rows.map(({ r }) => cell(r, k)).find(Boolean) ?? "";
     const n = (dayCounter.get(g.date) ?? 0) + 1;
     dayCounter.set(g.date, n);
     // The old game # is only used for grouping; numbers are reassigned per day.
     const dayNo = n;
     const gameId = `m_${g.date}_${String(dayNo).padStart(2, "0")}`;
+    const label = `Game ${g.date} #${dayNo} (row ${g.sheetRow})`;
 
-    const winnerNames = g.rows.map((r) => cell(r, "winner")).filter((w) => w && !truthy(w) && !/^(false|no|n|0)$/i.test(w));
     const ordered = g.rows
-      .map((r, idx) => ({ r, order: Number(cell(r, "seat")) || idx + 1 }))
+      .map((row, idx) => ({ ...row, order: Number(cell(row.r, "seat")) || idx + 1 }))
       .sort((a, b) => a.order - b.order);
 
     const gameSeats: GameSeat[] = ordered.map(({ r }, idx) => {
-      const pid = playerId(cell(r, "player"));
+      const name = cell(r, "player");
       const deckCell = cell(r, "deck");
+      // A deck with no player name (real sheet: two rows of one game list only a
+      // deck) is still a seat at the table; it is imported as a guest.
+      if (!name) warnings.push(`${label}: seat ${idx + 1} has deck "${deckCell}" but no player; imported as a guest (${GUEST_PLAYER_ID}).`);
+      const pid = name ? playerId(name) : GUEST_PLAYER_ID;
       let deck_id = "";
+      // Guests' decks (free text like "Caesar - <guest name>") are not imported.
       if (pid !== GUEST_PLAYER_ID && deckCell) {
-        const own = deckByKey.get(`${pid}|${deckCell.toLowerCase()}`) ?? deckByOwnerName.get(`${pid}|${splitDeckCell(deckCell).name.toLowerCase()}`);
+        const own = findOwnDeck(pid, deckCell);
         if (own) deck_id = own.deck_id;
         else {
           const others = decks.filter((d) => splitDeckCell(deckCell).name.toLowerCase() === d.name.toLowerCase());
           if (others.length === 1) deck_id = others[0].deck_id;
           else {
             deck_id = addDeck(pid, deckCell)!.deck_id;
-            warnings.push(`Game ${g.date} #${dayNo}: deck "${deckCell}" not in ${pid}'s list; added for them.`);
+            warnings.push(`${label}: deck "${deckCell}" not in ${pid}'s list; added for them.`);
           }
         }
+      } else if (pid !== GUEST_PLAYER_ID) {
+        // Kept as a seat with no deck: the game and the result still count.
+        warnings.push(`${label}: ${name} has no deck recorded; seat imported without a deck.`);
       }
-      const w = cell(r, "winner");
-      const isWinner =
-        truthy(w) ||
-        winnerNames.some((name) => name.toLowerCase() === cell(r, "player").toLowerCase()) ||
-        (deckCell !== "" && winnerNames.some((name) => name.toLowerCase() === deckCell.toLowerCase()));
-      return { game_id: gameId, seat: idx + 1, player_id: pid, deck_id, is_winner: isWinner };
+      return { game_id: gameId, seat: idx + 1, player_id: pid, deck_id, is_winner: false };
     });
 
-    if (!gameSeats.some((s) => s.is_winner)) warnings.push(`Game ${g.date} #${dayNo}: no winner found.`);
+    // Winner: the real sheet has one merged "Winner" cell per game holding a
+    // player name, or "RANDOM_Seat<N>" / "Random_Seat<N>" for a guest at seat N
+    // (1-based turn order). Per-row TRUE/x flags and deck names are also accepted.
+    ordered.forEach(({ r }, idx) => {
+      if (truthy(cell(r, "winner"))) gameSeats[idx].is_winner = true;
+    });
+    const winnerValues = [...new Set(g.rows.map(({ r }) => cell(r, "winner")).filter((w) => w && !truthy(w) && !/^(false|no|n|0)$/i.test(w)))];
+    for (const w of winnerValues) {
+      const ref = seatRef(w);
+      if (ref !== undefined) {
+        const s = gameSeats[ref - 1];
+        if (!s) warnings.push(`${label}: winner "${w}" but the game has ${gameSeats.length} seats; no winner set.`);
+        else {
+          if (s.player_id !== GUEST_PLAYER_ID) warnings.push(`${label}: winner "${w}" points at ${s.player_id}, not a guest; marked anyway.`);
+          s.is_winner = true;
+        }
+        continue;
+      }
+      const lw = w.toLowerCase();
+      let hits = ordered.map(({ r }, idx) => (cell(r, "player").toLowerCase() === lw ? idx : -1)).filter((x) => x >= 0);
+      if (!hits.length) hits = ordered.map(({ r }, idx) => (cell(r, "deck").toLowerCase() === lw || splitDeckCell(cell(r, "deck")).name.toLowerCase() === lw ? idx : -1)).filter((x) => x >= 0);
+      if (hits.length === 1) gameSeats[hits[0]].is_winner = true;
+      else if (hits.length > 1) warnings.push(`${label}: winner "${w}" matches ${hits.length} seats; no winner set.`);
+      else warnings.push(`${label}: winner "${w}" is not seated in this game; ignored.`);
+    }
+
+    // No winner (real sheet: one recent game has a blank Winner) →
+    // imported as "unfinished": kept for history, excluded from stats. (The old
+    // sheet's WinnerFilled helper instead credited the previous game's winner.)
+    // Two or more winners don't occur in the real sheet; if they do, all are kept
+    // and the game stays "won", with a warning to review it.
+    const winners = gameSeats.filter((s) => s.is_winner).length;
+    if (winners === 0) warnings.push(`${label}: no winner recorded; imported as unfinished.`);
+    if (winners > 1) warnings.push(`${label}: ${winners} winners; check this game.`);
+    if (gameSeats.length < 3 || gameSeats.length > 6) warnings.push(`${label}: ${gameSeats.length} seats (expected 3–6).`);
+
+    let brackets = [...new Set(splitMulti(first("brackets")).filter((b) => /^[1-5]$/.test(b)))].sort();
+    if (brackets.length) lastBrackets = brackets;
+    else if (stickyBrackets) brackets = lastBrackets;
+    let additional_rules = [
+      ...new Set(
+        splitMulti(first("rules"))
+          .filter((r) => !/^(none|n\/a|-)$/i.test(r))
+          .map((r) => lookupId(rules, r)),
+      ),
+    ];
+    if (first("rules")) lastRules = additional_rules;
+    else if (stickyRules) additional_rules = lastRules;
 
     games.push({
       game_id: gameId,
       day_game_no: dayNo,
       date: g.date,
       status: "approved",
-      result: "won",
-      brackets: [...new Set(splitMulti(first("brackets")).filter((b) => /^[1-5]$/.test(b)))].sort(),
-      win_conditions: splitMulti(first("winConditions")).map((w) => lookupId(winConditions, w)),
-      additional_rules: splitMulti(first("rules"))
-        .filter((r) => !/^(none|n\/a|-)$/i.test(r))
-        .map((r) => lookupId(rules, r)),
-      notes: g.rows.map((r) => cell(r, "notes")).filter(Boolean).join(" · "),
+      result: winners === 0 ? "unfinished" : "won",
+      brackets: [...brackets],
+      win_conditions: [...new Set(splitMulti(first("winConditions")).map((w) => lookupId(winConditions, w)))],
+      additional_rules: [...additional_rules],
+      notes: g.rows.map(({ r }) => cell(r, "notes")).filter(Boolean).join(" · "),
       submitted_by: "import",
       approved_by: "import",
       rev: 1,
@@ -374,17 +582,33 @@ export function migrate(old: OldSheet, opts: { commanderSeeds?: Record<string, s
     seats.push(...gameSeats);
   }
 
-  // Commander seeds: "owner|deck name" -> exact card name (resolved later via Scryfall).
+  // Commanders: one row per seeded card (confirmed seeds link the deck now),
+  // otherwise the deck nickname is left as typed_name for a Scryfall lookup.
   const deckCommanders: DeckCommander[] = [];
   for (const d of decks) {
-    const seed = opts.commanderSeeds?.[`${d.owner_player_id}|${d.name}`] ?? opts.commanderSeeds?.[d.name];
+    const seed = seedFor(opts.commanderSeeds, d);
+    if (Array.isArray(seed) && seed.length) {
+      const confirmed = seed.every((c) => c.oracle_id);
+      seed.forEach((c, i) =>
+        deckCommanders.push({
+          deck_id: d.deck_id,
+          slot: i + 1,
+          role: i === 0 ? "commander" : (c.role ?? "partner"),
+          scryfall_oracle_id: confirmed ? c.oracle_id! : "",
+          card_name: confirmed ? c.name : "",
+          typed_name: c.name,
+        }),
+      );
+      if (confirmed) d.commander_status = "resolved";
+      continue;
+    }
     deckCommanders.push({
       deck_id: d.deck_id,
       slot: 1,
       role: "commander",
       scryfall_oracle_id: "",
       card_name: "",
-      typed_name: seed ?? d.name,
+      typed_name: typeof seed === "string" ? seed : d.name,
     });
   }
 
