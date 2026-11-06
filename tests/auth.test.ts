@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { authOptions } from "@/lib/auth";
 import type { Db } from "@/lib/db";
+import { safeCallbackPath } from "@/lib/util";
 import { insertPlayers, resetDb, useTestDb } from "./helpers/db";
 
 let db: Db;
@@ -21,6 +22,21 @@ const signIn = (email: string, profile?: Record<string, unknown>) =>
     account: { provider: "google", type: "oauth", providerAccountId: "1" },
     profile: profile as never,
   } as never);
+
+describe("safeCallbackPath", () => {
+  it("keeps same-site paths from the middleware", () => {
+    expect(safeCallbackPath("/games/g_123")).toBe("/games/g_123");
+    expect(safeCallbackPath("/stats?view=decks")).toBe("/stats?view=decks");
+    expect(safeCallbackPath(undefined)).toBe("/");
+  });
+
+  it("drops anything that could leave the site or loop", () => {
+    for (const bad of ["https://evil.example", "//evil.example", "/\\evil.example", "javascript:alert(1)", "/login", "/api/auth/signout"]) {
+      expect(safeCallbackPath(bad)).toBe("/");
+    }
+    expect(safeCallbackPath(["//evil", "/games"])).toBe("/");
+  });
+});
 
 describe("sign-in invite list", () => {
   it("lets in an invited, verified Google email (case-insensitive)", async () => {
