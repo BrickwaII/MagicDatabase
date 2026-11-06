@@ -2,6 +2,7 @@ import { GameForm } from "@/components/GameForm";
 import { requirePlayer } from "@/lib/auth";
 import { listDecks, listPlayers, listRules, listWinConditions } from "@/lib/data";
 import { isAdmin } from "@/lib/permissions";
+import { playerOptions } from "@/lib/schema";
 
 export default async function NewGame() {
   const me = await requirePlayer();
@@ -15,7 +16,7 @@ export default async function NewGame() {
     <div className="stack form-page">
       <h1>Log a game</h1>
       <GameForm
-        players={players}
+        players={playerOptions(players)}
         decks={decks}
         winConditions={winConditions}
         rules={rules}

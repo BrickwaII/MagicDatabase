@@ -3,6 +3,7 @@ import { DeckForm } from "@/components/DeckForm";
 import { requirePlayer } from "@/lib/auth";
 import { getDeck, listDeckCommanders, listPlayers } from "@/lib/data";
 import { canEditDeck, isAdmin } from "@/lib/permissions";
+import { playerOptions } from "@/lib/schema";
 
 export default async function EditDeck({ params }: { params: Promise<{ id: string }> }) {
   const me = await requirePlayer();
@@ -14,7 +15,7 @@ export default async function EditDeck({ params }: { params: Promise<{ id: strin
   return (
     <div className="stack form-page">
       <h1>Edit {deck.name}</h1>
-      <DeckForm players={players} meId={me.player_id} admin={isAdmin(me)} deckId={id} initial={{ ...deck, commanders }} />
+      <DeckForm players={playerOptions(players)} meId={me.player_id} admin={isAdmin(me)} deckId={id} initial={{ ...deck, commanders }} />
     </div>
   );
 }

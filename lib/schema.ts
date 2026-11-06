@@ -23,6 +23,11 @@ export interface Player {
   active: boolean;
 }
 
+/** What client components get about a player: never the email or role. */
+export type PlayerOption = Pick<Player, "player_id" | "display_name">;
+export const playerOptions = (ps: Player[]): PlayerOption[] =>
+  ps.map(({ player_id, display_name }) => ({ player_id, display_name }));
+
 export interface Deck {
   deck_id: string;
   owner_player_id: string;

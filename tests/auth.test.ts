@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { authOptions } from "@/lib/auth";
 import type { Db } from "@/lib/db";
+import { playerOptions } from "@/lib/schema";
 import { safeCallbackPath } from "@/lib/util";
 import { insertPlayers, resetDb, useTestDb } from "./helpers/db";
 
@@ -22,6 +23,13 @@ const signIn = (email: string, profile?: Record<string, unknown>) =>
     account: { provider: "google", type: "oauth", providerAccountId: "1" },
     profile: profile as never,
   } as never);
+
+describe("playerOptions", () => {
+  it("gives client components names and ids only, never emails or roles", () => {
+    const out = playerOptions([{ player_id: "sam", display_name: "Sam", email: "sam@example.com", role: "admin", active: true }]);
+    expect(out).toEqual([{ player_id: "sam", display_name: "Sam" }]);
+  });
+});
 
 describe("safeCallbackPath", () => {
   it("keeps same-site paths from the middleware", () => {

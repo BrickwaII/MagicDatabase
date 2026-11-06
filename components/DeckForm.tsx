@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { saveDeck } from "@/app/actions";
-import { BRACKETS, COLOR_ORDER, type DeckCommander, type Player } from "@/lib/schema";
+import { BRACKETS, COLOR_ORDER, type DeckCommander, type PlayerOption } from "@/lib/schema";
 import {
   byOracleId,
   canPair,
@@ -167,7 +167,7 @@ function SlotEditor({
 }
 
 interface Props {
-  players: Player[];
+  players: PlayerOption[];
   meId: string;
   admin: boolean;
   deckId?: string;

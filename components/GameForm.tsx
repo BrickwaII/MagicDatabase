@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { saveGame } from "@/app/actions";
 import { CloseIcon, CrownIcon, DownIcon, UpIcon } from "./Icons";
-import { BRACKETS, GUEST_PLAYER_ID, MAX_SEATS, MIN_SEATS, type Deck, type GameResult, type Lookup, type Player } from "@/lib/schema";
+import { BRACKETS, GUEST_PLAYER_ID, MAX_SEATS, MIN_SEATS, type Deck, type GameResult, type Lookup, type PlayerOption } from "@/lib/schema";
 
 interface SeatState {
   player_id: string;
@@ -23,7 +23,7 @@ export interface GameFormInitial {
 }
 
 interface Props {
-  players: Player[];
+  players: PlayerOption[];
   decks: Deck[];
   winConditions: Lookup[];
   rules: Lookup[];

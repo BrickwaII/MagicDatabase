@@ -7,6 +7,7 @@ import { requirePlayer } from "@/lib/auth";
 import { getGame, listDecks, listPlayers, listRules, listWinConditions } from "@/lib/data";
 import { loadNames } from "@/lib/names";
 import { canEditGame, isAdmin } from "@/lib/permissions";
+import { playerOptions } from "@/lib/schema";
 
 export default async function GamePage({
   params,
@@ -42,7 +43,7 @@ export default async function GamePage({
           </a>
         </div>
         <GameForm
-          players={players}
+          players={playerOptions(players)}
           decks={decks}
           winConditions={winConditions}
           rules={rules}
