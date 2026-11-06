@@ -19,7 +19,7 @@ import { ensureDefaultGroup } from "../lib/db/group";
 import { importMigration } from "../lib/db/import";
 import { migrate, type Grid, type MigrationResult } from "../lib/migrate";
 import type { GameWithSeats } from "../lib/schema";
-import { commanderQuery, identityOf, search } from "../lib/scryfall";
+import { commanderQuery, identityOf, search, type ScryCard } from "../lib/scryfall";
 import { playerStats, seatStats } from "../lib/stats";
 import { OldSheetReader } from "./old-sheet";
 
@@ -63,27 +63,51 @@ async function readOld(): Promise<Record<keyof typeof OLD_TABS, Grid>> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Link each deck to a Scryfall card when exactly one legal commander matches its name and colors. */
+/** True when every color of `card` is inside `deck` (both WUBRG letter strings; "C" = colorless). */
+function withinColors(card: string, deck: string) {
+  return card === "C" || [...card].every((ch) => deck.includes(ch));
+}
+
+/**
+ * Link decks to Scryfall cards. Each slot links when exactly one legal commander matches its
+ * name and fits inside the deck's colors; a deck is marked resolved only when all its
+ * commander/partner slots linked and their combined identity equals the deck's colors,
+ * so partner pairs (e.g. Pako + Haldan) resolve correctly.
+ */
 async function resolveCommanders(res: MigrationResult) {
-  let linked = 0;
+  const cards = new Map<(typeof res.deckCommanders)[number], ScryCard>();
   for (const c of res.deckCommanders) {
     if (c.scryfall_oracle_id || !c.typed_name) continue;
     const deck = res.decks.find((d) => d.deck_id === c.deck_id)!;
     await sleep(120);
     try {
       const hits = (await search(commanderQuery(c.typed_name), 50)).filter(
-        (card) => deck.colors === "C" || identityOf([card]) === deck.colors,
+        (card) => deck.colors === "C" || withinColors(identityOf([card]), deck.colors),
       );
       const exact = hits.filter((h) => h.name.toLowerCase() === c.typed_name.toLowerCase());
       const pick = exact.length === 1 ? exact[0] : hits.length === 1 ? hits[0] : undefined;
       if (pick) {
         c.scryfall_oracle_id = pick.oracle_id;
         c.card_name = pick.name;
-        deck.commander_status = "resolved";
-        linked++;
+        cards.set(c, pick);
       }
     } catch (e) {
       console.warn(`Scryfall lookup failed for ${c.typed_name}: ${(e as Error).message}`);
+    }
+  }
+  let linked = 0;
+  for (const deck of res.decks) {
+    const slots = res.deckCommanders.filter((c) => c.deck_id === deck.deck_id && c.role !== "companion");
+    if (slots.length === 0 || !slots.every((c) => c.scryfall_oracle_id)) continue;
+    const picked = slots.map((c) => cards.get(c)).filter((x): x is ScryCard => !!x);
+    // Slots linked earlier (kept from a previous run) have no card here; trust them.
+    const ok = picked.length < slots.length || deck.colors === "C" || identityOf(picked) === deck.colors;
+    if (ok) {
+      deck.commander_status = "resolved";
+      linked++;
+    } else {
+      console.warn(`Deck ${deck.name} (${deck.colors}): commanders' combined colors don't match; left unresolved.`);
+      for (const c of slots) if (cards.has(c)) (c.scryfall_oracle_id = ""), (c.card_name = "");
     }
   }
   return linked;
