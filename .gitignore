@@ -9,3 +9,6 @@ out/
 next-env.d.ts
 service-account*.json
 migration-report*.md
+
+# Claude agent worktrees
+.claude/
