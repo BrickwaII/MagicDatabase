@@ -41,12 +41,14 @@ export default async function Queue({ searchParams }: { searchParams: Promise<{ 
             <div className="queue-actions">
               <form action={approveGameAction}>
                 <input type="hidden" name="id" value={g.game_id} />
+                <input type="hidden" name="rev" value={g.rev} />
                 <SubmitButton className="primary" pendingText="Approving…">
                   Approve
                 </SubmitButton>
               </form>
               <form action={rejectGameAction} className="reject">
                 <input type="hidden" name="id" value={g.game_id} />
+                <input type="hidden" name="rev" value={g.rev} />
                 <input name="reason" placeholder="Reason for rejecting" aria-label="Reason for rejecting" required />
                 <SubmitButton className="danger" pendingText="Rejecting…">
                   Reject
