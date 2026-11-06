@@ -76,23 +76,9 @@ npm run build
 
 ## Production setup (one time)
 
-1. **Vercel project:** import the GitHub repo.
-2. **Database:** in the Vercel project, open Storage → add **Neon** (Postgres). The integration sets `DATABASE_URL` (and `DATABASE_URL_UNPOOLED`) for you. Without the integration, create a Neon project yourself and paste its connection string as `DATABASE_URL`.
-3. **Schema:** nothing to do by hand. On Vercel the `vercel-build` script runs `npm run db:migrate && next build`, so every deploy applies pending migrations before building. The build fails with a clear message if `DATABASE_URL` is missing. Preview deploys migrate whichever database their `DATABASE_URL` points at, so give previews their own Neon branch (the integration can do this) if you don't want them touching production.
-4. **Group and first admin:** with the production `DATABASE_URL` in `.env.local` (`vercel env pull .env.local` does this), run
-   `npm run setup -- --admin your@gmail.com "Henry"`
-   This applies migrations, creates the group ("Henry's Playgroup" unless you pass `--group "Name"`), and adds or promotes the admin. It's safe to run again.
-5. **OAuth client:** in Google Cloud, go to APIs & Services → Credentials → OAuth client ID → Web application.
-6. **Vercel environment variables:**
-   - `DATABASE_URL`: set by the Neon integration
-   - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
-   - `NEXTAUTH_SECRET`: generate with `openssl rand -base64 32`
-   - `NEXTAUTH_URL`: e.g. `https://your-app.vercel.app`
-   - Do **not** set `DEV_LOGIN`.
-7. **Redirect URIs:** after the first deploy, add these to the OAuth client's authorized redirect URIs:
-   - `https://your-app.vercel.app/api/auth/callback/google`
-   - `http://localhost:3000/api/auth/callback/google`
-8. Add your friends on `/admin` with their Google emails.
+Follow [LAUNCH.md](LAUNCH.md): Google sign-in client, Vercel project, Neon database, environment variables, first admin and the import from the old sheet, step by step.
+
+On Vercel the `vercel-build` script runs `npm run db:migrate && next build`, so every deploy applies pending migrations first. Preview deploys migrate whichever database their `DATABASE_URL` points at, so give previews their own Neon branch.
 
 ## Migrating the old sheet
 
