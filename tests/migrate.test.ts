@@ -195,12 +195,23 @@ Bo,🟥Sparkk,4,,,Bo,🟥Spark
     ]);
   });
 
-  it("carries brackets forward until the next recorded one, but not rules", () => {
-    expect(res.games.map((g) => g.brackets.join("+"))).toEqual(["2+3", "2+3", "5", "5", "3"]);
+  it("imports a blank bracket as no bracket and doesn't carry rules forward (both opt-in)", () => {
+    expect(res.games.map((g) => g.brackets.join("+"))).toEqual(["2+3", "", "5", "", "3"]);
     expect(res.games.map((g) => g.additional_rules.length)).toEqual([1, 0, 0, 0, 0]);
-    const plain = migrate({ games, decks }, { stickyBrackets: false, stickyRules: true });
-    expect(plain.games.map((g) => g.brackets.join("+"))).toEqual(["2+3", "", "5", "", "3"]);
-    expect(plain.games.every((g) => g.additional_rules.length === 1)).toBe(true);
+    const sticky = migrate({ games, decks }, { stickyBrackets: true, stickyRules: true });
+    expect(sticky.games.map((g) => g.brackets.join("+"))).toEqual(["2+3", "2+3", "5", "5", "3"]);
+    expect(sticky.games.every((g) => g.additional_rules.length === 1)).toBe(true);
+  });
+
+  it("keeps guests' deck text in the game notes, one line per guest seat", () => {
+    expect(res.games.map((g) => g.notes)).toEqual([
+      "Guest seat 3: Some Guest Deck - Zed",
+      "Guest seat 1: Guest A\nGuest seat 3: Guest B",
+      "Guest seat 3: Lost Name Deck\nGuest seat 4: Other Lost Deck",
+      "Guest seat 2: Guest C",
+      "Guest seat 3: Guest D",
+    ]);
+    expect(res.seats.filter((s) => s.player_id === "RANDOM").every((s) => s.deck_id === "")).toBe(true);
   });
 
   it("applies commander seeds by owner|name or name|colors, with partner pairs", () => {
@@ -217,5 +228,74 @@ Bo,🟥Sparkk,4,,,Bo,🟥Spark
     expect(cmds(spark).map((c) => c.scryfall_oracle_id)).toEqual(["oid-a", "oid-b"]);
     expect(cmds(deck("ana", "Spark", "R"))).toMatchObject([{ typed_name: "Spark", scryfall_oracle_id: "" }]);
     expect(deck("ana", "Spark", "R").commander_status).toBe("unresolved");
+  });
+});
+
+// Borrowed decks and guest deck text (invented names), shaped like the real Decks tab:
+// "Kestrel (Bo)" in Ana's column is Bo's Kestrel played by Ana.
+describe("migrate: borrowed decks and guest decks", () => {
+  const decks = parseCsv(`Player:,Ana,Bo,Cy
+Decks:,🟦🟥⬜Kestrel (Bo),🟥⬜🟦Kestrel,⬛Bramble (ana)
+,🟩Fern,🟩Ghost (Cy),🟥⬜Vex(Precon)
+,⬜⬛Bramble,,⬛Own (Cy)
+`);
+  const games = parseCsv(`Date,#,Players (In Turn Order),Decks,Winner,Bracket(s),Win Condition(s),Additional Rules(s),Notes
+3/1/2026,1,Ana,🟦🟥⬜Kestrel (Bo),Ana,3,,,close game
+,,Bo,🟥⬜🟦Kestrel,,,,,
+,,Cy,⬛Bramble (Ana),,,,,second line
+,,RANDOM,"Goblin Pile (with Zed's sleeves, lol)",,,,,
+3/1/2026,2,Bo,🟩Ghost (Cy),RANDOM_Seat3,,,,
+,,Cy,🟥⬜Vex(Precon),,,,,
+,,RANDOM_Seat3,Wizard Tribal - Zed,,,,,
+,,Ana,🟩Fern,,,,,
+3/1/2026,3,Ana,🟩Fern,,,,,
+,,Bo,🟥⬜🟦Kestrel,,,,,
+,,Cy,⬛Own (Cy),,,,,
+`);
+  const res = migrate({ games, decks });
+  const seatsOf = (i: number) => res.seats.filter((s) => s.game_id === res.games[i].game_id);
+  const deckOf = (id: string) => res.decks.find((d) => d.deck_id === id)!;
+
+  it("doesn't create a deck for the borrower; the seat uses the owner's deck", () => {
+    expect(res.decks.map((d) => `${d.owner_player_id}|${d.name}|${d.colors}`).sort()).toEqual([
+      "ana|Bramble|WB",
+      "ana|Fern|G",
+      "bo|Kestrel|WUR",
+      "cy|Ghost|G",
+      "cy|Own (Cy)|B",
+      "cy|Vex(Precon)|WR",
+    ]);
+    const [ana, bo, cy] = seatsOf(0);
+    expect(ana).toMatchObject({ player_id: "ana", is_winner: true });
+    expect(deckOf(ana.deck_id)).toMatchObject({ owner_player_id: "bo", name: "Kestrel" });
+    expect(bo.deck_id).toBe(ana.deck_id);
+    // Owner matched case-insensitively, deck matched by name despite other colors (⬛ vs ⬜⬛).
+    expect(cy.player_id).toBe("cy");
+    expect(deckOf(cy.deck_id)).toMatchObject({ owner_player_id: "ana", name: "Bramble", colors: "WB" });
+  });
+
+  it("creates the owner's deck with a warning when the owner doesn't list it", () => {
+    const [bo] = seatsOf(1);
+    expect(bo.player_id).toBe("bo");
+    expect(deckOf(bo.deck_id)).toMatchObject({ owner_player_id: "cy", name: "Ghost" });
+    expect(res.warnings.filter((w) => w.includes('Borrowed deck "🟩Ghost (Cy)"'))).toHaveLength(1);
+  });
+
+  it("keeps other parentheses as part of the nickname", () => {
+    expect(deckOf(seatsOf(1)[1].deck_id)).toMatchObject({ owner_player_id: "cy", name: "Vex(Precon)" });
+    expect(deckOf(seatsOf(2)[2].deck_id)).toMatchObject({ owner_player_id: "cy", name: "Own (Cy)" });
+  });
+
+  it("appends guests' deck text to the notes, after the existing notes", () => {
+    expect(res.games[0].notes).toBe("close game · second line\nGuest seat 4: Goblin Pile (with Zed's sleeves, lol)");
+    // "RANDOM_Seat3" in the player column is a guest too.
+    expect(seatsOf(1)[2]).toMatchObject({ player_id: "RANDOM", deck_id: "", is_winner: true });
+    expect(res.games[1].notes).toBe("Guest seat 3: Wizard Tribal - Zed");
+    expect(res.players.map((p) => p.player_id)).toEqual(["ana", "bo", "cy"]);
+  });
+
+  it("imports a game with no winner as unfinished", () => {
+    expect(res.games.map((g) => g.result)).toEqual(["won", "won", "unfinished"]);
+    expect(res.games[2].brackets).toEqual([]);
   });
 });
