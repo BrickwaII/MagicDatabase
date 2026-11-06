@@ -1,13 +1,10 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { and, eq } from "drizzle-orm";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   approveGame,
   createDeck,
   createGame,
   getGame,
-  invalidate,
   listGames,
   rejectGame,
   StaleError,
@@ -15,24 +12,27 @@ import {
   upsertPlayer,
   type GameInput,
 } from "@/lib/data";
-import { serialize, type Player } from "@/lib/schema";
-import { setStore } from "@/lib/store";
-import { LocalStore } from "@/lib/store/local";
+import type { Db } from "@/lib/db";
+import { auditLog, decks, games, winConditions } from "@/lib/db/schema";
+import type { Player } from "@/lib/schema";
+import { insertPlayers, resetDb, useTestDb } from "./helpers/db";
 
 const henry: Player = { player_id: "henry", display_name: "Henry", email: "h@x.com", role: "admin", active: true };
 const sam: Player = { player_id: "sam", display_name: "Sam", email: "s@x.com", role: "player", active: true };
 const alex: Player = { player_id: "alex", display_name: "Alex", email: "a@x.com", role: "player", active: true };
 const kim: Player = { player_id: "kim", display_name: "Kim", email: "k@x.com", role: "player", active: true };
 
-let store: LocalStore;
+let db: Db;
+let gid: string;
+
+beforeAll(async () => {
+  db = await useTestDb();
+});
 
 beforeEach(async () => {
-  store = new LocalStore(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ct-")), "db.json"));
-  setStore(store);
-  invalidate();
-  await store.ensureTabs();
-  await store.replaceAll("Players", [henry, sam, alex, kim].map(serialize.player));
-  await store.replaceAll("WinConditions", [{ id: "combat", name: "Combat" }]);
+  gid = await resetDb(db);
+  await insertPlayers(db, gid, [henry, sam, alex, kim]);
+  await db.insert(winConditions).values({ groupId: gid, id: "combat", name: "Combat" });
   for (const [owner, name] of [["henry", "Tifa"], ["sam", "Tidus"], ["alex", "Kilo"], ["kim", "Tidus"]]) {
     const actor = [henry, sam, alex, kim].find((p) => p.player_id === owner)!;
     await createDeck({ owner_player_id: owner, name, colors: "wu", commanders: [{ role: "commander", typed_name: name }] }, actor);
@@ -40,8 +40,8 @@ beforeEach(async () => {
 });
 
 async function deckOf(owner: string) {
-  const rows = await store.getRows("Decks");
-  return rows.find((r) => r.data.owner_player_id === owner)!.data.deck_id;
+  const [row] = await db.select().from(decks).where(and(eq(decks.groupId, gid), eq(decks.ownerPlayerId, owner)));
+  return row.id;
 }
 
 async function input(over: Partial<GameInput> = {}): Promise<GameInput> {
@@ -66,6 +66,8 @@ describe("games", () => {
     expect(g1.seats[2]).toMatchObject({ player_id: "RANDOM", deck_id: "" });
     const g2 = await createGame(await input(), henry);
     expect(g2).toMatchObject({ status: "approved", approved_by: "henry" });
+    // Round-trips through the database unchanged.
+    expect(await getGame(g1.game_id)).toEqual(g1);
   });
 
   it("numbers games per day", async () => {
@@ -73,13 +75,16 @@ describe("games", () => {
     const b = await createGame(await input(), henry);
     const c = await createGame(await input({ date: "2026-03-02" }), henry);
     expect([a.day_game_no, b.day_game_no, c.day_game_no]).toEqual([1, 2, 1]);
+    const moved = await updateGame(c.game_id, await input(), c.rev, henry);
+    expect(moved.day_game_no).toBe(3);
   });
 
-  it("validates winners, seats and duplicate players", async () => {
+  it("validates winners, seats, duplicate players and dates", async () => {
     const base = await input();
     await expect(createGame({ ...base, seats: base.seats.slice(0, 2) }, sam)).rejects.toThrow(/at least 3/);
     await expect(createGame({ ...base, seats: base.seats.map((s) => ({ ...s, is_winner: false })) }, sam)).rejects.toThrow(/winner/);
     await expect(createGame({ ...base, seats: [base.seats[0], base.seats[0], base.seats[1]] }, sam)).rejects.toThrow(/once/);
+    await expect(createGame({ ...base, date: "2026-02-30" }, sam)).rejects.toThrow(/date/);
     const draw = await createGame({ ...base, result: "draw" }, henry);
     expect(draw.seats.every((s) => !s.is_winner)).toBe(true);
     expect(draw.win_conditions).toEqual([]);
@@ -102,8 +107,39 @@ describe("games", () => {
     expect((await getGame(g.game_id))!).toMatchObject({ status: "rejected", reject_reason: "wrong date" });
     await approveGame(g.game_id, henry);
     expect((await listGames({ status: "approved" })).map((x) => x.game_id)).toContain(g.game_id);
-    const audit = (await store.getRows("AuditLog")).map((r) => r.data.action);
+    const audit = (await db.select().from(auditLog).where(eq(auditLog.groupId, gid))).map((r) => r.action);
     expect(audit).toEqual(expect.arrayContaining(["create", "reject", "approve"]));
+  });
+});
+
+describe("rev conflicts", () => {
+  it("refuses a save based on an older rev and leaves the stored game untouched", async () => {
+    const g = await createGame(await input({ notes: "original" }), henry);
+    // Someone approves/rejects in between: that bumps rev too.
+    await rejectGame(g.game_id, henry, "check seats");
+    const stored = (await getGame(g.game_id))!;
+    expect(stored.rev).toBe(2);
+
+    await expect(
+      updateGame(g.game_id, await input({ notes: "late edit", seats: (await input()).seats.slice().reverse() }), g.rev, sam),
+    ).rejects.toBeInstanceOf(StaleError);
+    expect(await getGame(g.game_id)).toEqual(stored);
+
+    const ok = await updateGame(g.game_id, await input({ notes: "fresh edit" }), stored.rev, sam);
+    expect(ok).toMatchObject({ rev: 3, notes: "fresh edit", status: "pending" });
+  });
+
+  it("lets only one of two simultaneous edits with the same rev win", async () => {
+    const g = await createGame(await input(), henry);
+    const results = await Promise.allSettled([
+      updateGame(g.game_id, await input({ notes: "A" }), g.rev, sam),
+      updateGame(g.game_id, await input({ notes: "B" }), g.rev, alex),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const failed = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(failed.reason).toBeInstanceOf(StaleError);
+    const [row] = await db.select().from(games).where(and(eq(games.groupId, gid), eq(games.id, g.game_id)));
+    expect(row.rev).toBe(2);
   });
 });
 
@@ -123,5 +159,9 @@ describe("decks and players", () => {
     const p = await upsertPlayer({ display_name: "Sam", email: "sam2@x.com", role: "player", active: true }, henry);
     expect(p.player_id).toBe("sam-2");
     await expect(upsertPlayer({ ...henry, role: "player" }, henry)).rejects.toThrow(/own admin/);
+    await expect(upsertPlayer({ display_name: "Dup", email: "S@x.com", role: "player", active: true }, henry)).rejects.toThrow(/already uses/);
+    // Several players without an email are fine.
+    await upsertPlayer({ display_name: "No Mail 1", email: "", role: "player", active: true }, henry);
+    await upsertPlayer({ display_name: "No Mail 2", email: "", role: "player", active: true }, henry);
   });
 });
