@@ -31,3 +31,17 @@ export function parseCsv(text: string): string[][] {
   }
   return rows;
 }
+
+/**
+ * Write rows as RFC 4180 CSV (CRLF line endings). Cells a spreadsheet would
+ * run as a formula (=, +, -, @ at the start) get a leading apostrophe, unless
+ * they are plain numbers.
+ */
+export function toCsv(rows: (string | number | boolean | null | undefined)[][]): string {
+  const cell = (v: string | number | boolean | null | undefined) => {
+    let s = v === null || v === undefined ? "" : String(v);
+    if (/^[=+\-@\t\r]/.test(s) && !/^[-+]?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return rows.map((r) => r.map(cell).join(",")).join("\r\n") + "\r\n";
+}

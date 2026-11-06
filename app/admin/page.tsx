@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { saveLookupAction, savePlayerAction } from "@/app/actions";
+import { ShareAndExport } from "@/components/ShareAndExport";
 import { requireAdmin } from "@/lib/auth";
 import { listPlayers, listRules, listWinConditions } from "@/lib/data";
 import type { Lookup, Player } from "@/lib/schema";
@@ -73,6 +74,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
         <LookupList tab="WinConditions" title="Win conditions" items={wcs} />
         <LookupList tab="Rules" title="Additional rules" items={rules} />
       </div>
+      <ShareAndExport />
     </div>
   );
 }

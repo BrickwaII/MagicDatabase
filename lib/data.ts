@@ -48,7 +48,7 @@ export { slugify };
 
 type Conn = Db | Tx;
 
-async function ctx(): Promise<{ db: Db; gid: string }> {
+export async function ctx(): Promise<{ db: Db; gid: string }> {
   const db = await getDb();
   return { db, gid: await currentGroupId(db) };
 }
@@ -61,7 +61,7 @@ export function pgErrorCode(e: unknown): string | undefined {
   return undefined;
 }
 
-async function audit(
+export async function audit(
   db: Conn,
   gid: string,
   actor: Player | string,

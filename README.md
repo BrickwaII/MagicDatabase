@@ -17,7 +17,9 @@ A website for our Commander group: friends sign in with Google, log games, manag
 | `/queue` | Admin: approve or reject pending games (rejecting needs a reason); decks still waiting to be linked to a real card |
 | `/decks` | Decks per owner with records; add or edit your own |
 | `/stats` | Player, deck and turn-order stats with filters for pod size, bracket, ignored rules and hidden players (Guest hidden by default) |
-| `/admin` | Players and invite list, admin grants, win conditions and rules; `/admin/audit` shows the change log |
+| `/admin` | Players and invite list, admin grants, win conditions and rules, public stats link, export; `/admin/audit` shows the change log |
+| `/s/:token` | Public, read-only stats and the last 20 approved games for one group, no sign-in. Admins turn it on, copy or regenerate the link on `/admin`. Never shows emails, notes, pending or rejected games |
+| `/admin/export` | Admin: full JSON backup of the group (emails, notes and audit log included). `/admin/export/games-flat.csv` (one row per seat, like the old sheet), `players.csv` and `decks.csv` |
 
 ### Rules built in
 
