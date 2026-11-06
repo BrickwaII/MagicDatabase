@@ -6,9 +6,11 @@ export default async function Audit() {
   const entries = await listAudit(300);
   return (
     <div className="stack">
-      <h1>Audit log</h1>
+      <div className="page-head">
+        <h1>Audit log</h1>
+      </div>
       <p className="small muted">Latest 300 changes, newest first. Full history is in the audit_log table.</p>
-      <div className="table-wrap card" style={{ padding: 0 }}>
+      <div className="table-wrap card table-card">
         <table>
           <thead>
             <tr>

@@ -31,18 +31,24 @@ export interface StatsViewProps {
 }
 
 function SeatTables({ tables, perPlayer }: { tables: SeatTable[]; perPlayer?: boolean }) {
-  if (tables.length === 0) return <p className="muted">No games match these filters.</p>;
+  if (tables.length === 0)
+    return (
+      <div className="empty">
+        <strong>No games match these filters</strong>
+        Loosen the filters above to see turn-order stats.
+      </div>
+    );
   return (
-    <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+    <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 420px), 1fr))" }}>
       {tables.map((t) => (
-        <div key={t.podSize} className="card" style={{ padding: 0 }}>
-          <div style={{ padding: "10px 12px" }}>
-            <strong>{t.podSize}-player pods</strong>{" "}
+        <section key={t.podSize} className="card table-card">
+          <div className="section-head" style={{ padding: "12px 12px 0" }}>
+            <h3 style={{ margin: 0 }}>{t.podSize}-player pods</h3>
             <span className="muted small">
               {t.games} {perPlayer ? "games played" : "games"}
             </span>
           </div>
-          <div className="table-wrap">
+          <div className="table-wrap sticky-col">
             <table>
               <thead>
                 <tr>
@@ -57,10 +63,10 @@ function SeatTables({ tables, perPlayer }: { tables: SeatTable[]; perPlayer?: bo
               <tbody>
                 {t.seats.map((s) => (
                   <tr key={s.seat}>
-                    <td>{s.seat}</td>
+                    <td className="strong">Seat {s.seat}</td>
                     <td className="num">{s.played}</td>
                     <td className="num">{s.wins}</td>
-                    <td className="num">{pct(s.winRate)}</td>
+                    <td className="num win-pct">{pct(s.winRate)}</td>
                     <td className="num">{pct(s.pctPlayed)}</td>
                     <td className="num">{pct(s.pctWon)}</td>
                   </tr>
@@ -68,7 +74,7 @@ function SeatTables({ tables, perPlayer }: { tables: SeatTable[]; perPlayer?: bo
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
       ))}
     </div>
   );
@@ -96,23 +102,26 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
 
   return (
     <div className="stack">
-      {heading}
-      <div className="tabs">
+      <div className="page-head">{heading}</div>
+      <nav className="tabs" aria-label="Stats views">
         {(["players", "decks", "seats"] as const).map((v) => (
           <Link key={v} href={qs(v)} className={view === v ? "on" : ""}>
             {v === "players" ? "Players" : v === "decks" ? "Decks" : "Turn order"}
           </Link>
         ))}
-      </div>
+      </nav>
 
       <details className="card" open={submitted}>
-        <summary>Filters</summary>
+        <summary>
+          Filters
+          <span className="summary-hint">{sum.counted} games counted</span>
+        </summary>
         <form method="get" action={basePath} className="stack" style={{ marginTop: 10 }}>
           <input type="hidden" name="view" value={view} />
           <input type="hidden" name="f" value="1" />
           {seatPlayer && <input type="hidden" name="player" value={seatPlayer} />}
           <div>
-            <span className="lbl small muted">Pod size (none = all)</span>
+            <span className="lbl">Pod size (none picked = all)</span>
             <div className="chips">
               {POD_SIZES.map((n) => (
                 <label key={n} className="chip">
@@ -122,7 +131,7 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
             </div>
           </div>
           <div>
-            <span className="lbl small muted">Brackets (none = all)</span>
+            <span className="lbl">Brackets (none picked = all)</span>
             <div className="chips">
               {BRACKETS.map((b) => (
                 <label key={b} className="chip">
@@ -132,7 +141,7 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
             </div>
           </div>
           <div>
-            <span className="lbl small muted">Ignore games with these rules</span>
+            <span className="lbl">Leave out games with these rules</span>
             <div className="chips">
               {rules.map((r) => (
                 <label key={r.id} className="chip">
@@ -142,7 +151,7 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
             </div>
           </div>
           <div>
-            <span className="lbl small muted">Hide players</span>
+            <span className="lbl">Hide players</span>
             <div className="chips">
               <label className="chip">
                 <input type="checkbox" name="noplayer" value={GUEST_PLAYER_ID} defaultChecked={filter.ignoredPlayers.includes(GUEST_PLAYER_ID)} /> Guest
@@ -157,9 +166,9 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
           </div>
           <div className="row">
             <button className="primary" type="submit">
-              Apply
+              Apply filters
             </button>
-            <Link href={`${basePath}?view=${view}`} className="small">
+            <Link href={`${basePath}?view=${view}`} className="btn">
               Reset
             </Link>
           </div>
@@ -169,18 +178,19 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
       <p className="small muted">
         {publicView ? (
           <>
-            {sum.counted} games counted. Draws ({sum.draws}) and unfinished games ({sum.unfinished}) are never counted.
+            Counting {sum.counted} games. Draws ({sum.draws}) and unfinished ({sum.unfinished}) games never count.
           </>
         ) : (
           <>
-            {sum.counted} approved games counted. Draws ({sum.draws}), unfinished games ({sum.unfinished}) and pending games (
-            {sum.pending}) are never counted.
+            Counting {sum.counted} approved games. Draws ({sum.draws}), unfinished ({sum.unfinished}) and pending ({sum.pending}) games
+            never count.
           </>
         )}
       </p>
 
       {view === "players" && (
-        <div className="table-wrap card" style={{ padding: 0 }}>
+        <div className="card table-card">
+          <div className="table-wrap sticky-col">
           <table>
             <thead>
               <tr>
@@ -193,26 +203,27 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
             <tbody>
               {playerStats(games, filter).map((s) => (
                 <tr key={s.player_id}>
-                  <td>
+                  <td className="strong">
                     <Link href={`${basePath}?view=seats&player=${encodeURIComponent(s.player_id)}`}>{name(s.player_id)}</Link>
                   </td>
                   <td className="num">{s.games}</td>
                   <td className="num">{s.wins}</td>
-                  <td className="num">{pct(s.winRate)}</td>
+                  <td className="num win-pct">{pct(s.winRate)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
       {view === "decks" && (
-        <div className="table-wrap card" style={{ padding: 0 }}>
+        <div className="card table-card">
+          <div className="table-wrap sticky-col">
           <table>
             <thead>
               <tr>
-                <th>Deck</th>
-                <th>Pilot</th>
+                <th>Deck and pilot</th>
                 <th className="num">Games</th>
                 <th className="num">Wins</th>
                 <th className="num">Win %</th>
@@ -225,29 +236,34 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
                 return (
                   <tr key={`${s.player_id}|${s.deck_id}`}>
                     <td>
-                      {d && <Pips colors={d.colors} />} {d?.name ?? s.deck_id}
-                      {d && d.owner_player_id !== s.player_id && <span className="small muted"> ({name(d.owner_player_id)}&apos;s)</span>}
+                      <span className="cell-deck">
+                        {d && <Pips colors={d.colors} />} <strong>{d?.name ?? s.deck_id}</strong>
+                      </span>
+                      <span className="cell-sub">
+                        {name(s.player_id)}
+                        {d && d.owner_player_id !== s.player_id && <>, borrowed from {name(d.owner_player_id)}</>}
+                      </span>
                     </td>
-                    <td>{name(s.player_id)}</td>
                     <td className="num">{s.games}</td>
                     <td className="num">{s.wins}</td>
-                    <td className="num">{pct(s.winRate)}</td>
-                    <td>{s.lastPlayed}</td>
+                    <td className="num win-pct">{pct(s.winRate)}</td>
+                    <td className="muted">{s.lastPlayed}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
       {view === "seats" && (
         <div className="stack">
-          <form method="get" action={basePath} className="row">
+          <form method="get" action={basePath} className="deck-filter">
             {Object.entries(sp).map(([k, v]) =>
               k === "player" ? null : list(v).map((x, i) => <input key={`${k}${i}`} type="hidden" name={k} value={x} />),
             )}
-            <select name="player" defaultValue={seatPlayer}>
+            <select name="player" defaultValue={seatPlayer} aria-label="Whose turn-order stats">
               <option value="">Everyone</option>
               {players.map((p) => (
                 <option key={p.player_id} value={p.player_id}>
@@ -259,7 +275,7 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
           </form>
           {seatPlayer ? (
             <>
-              <h2>{name(seatPlayer)}: where they sat vs where they won</h2>
+              <h2>{name(seatPlayer)}: where they sat and where they won</h2>
               <SeatTables tables={playerSeatStats(games, seatPlayer, filter)} perPlayer />
             </>
           ) : (

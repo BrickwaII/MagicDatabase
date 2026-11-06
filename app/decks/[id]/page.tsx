@@ -12,7 +12,7 @@ export default async function EditDeck({ params }: { params: Promise<{ id: strin
   if (!canEditDeck(me, deck)) redirect("/decks");
   const [players, commanders] = await Promise.all([listPlayers(), listDeckCommanders(id)]);
   return (
-    <div className="stack">
+    <div className="stack form-page">
       <h1>Edit {deck.name}</h1>
       <DeckForm players={players} meId={me.player_id} admin={isAdmin(me)} deckId={id} initial={{ ...deck, commanders }} />
     </div>
