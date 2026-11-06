@@ -33,7 +33,7 @@ export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
   pages: { signIn: "/login", error: "/login" },
   callbacks: {
-    // The invite list is the Players tab: only active players with a matching email get in.
+    // The invite list is the players table: only active players with a matching email get in.
     async signIn({ user }) {
       if (!user.email) return false;
       return (await getPlayerByEmail(user.email)) ? true : "/login?error=NotInvited";

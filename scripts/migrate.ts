@@ -1,23 +1,27 @@
-// One-time import from the old "Magic Records - 2026" sheet into the new layout.
+// One-time import from the old "Magic Records - 2026" sheet into Postgres.
 //
 //   npm run migrate                      dry run: read, transform, write migration-report.md
-//   npm run migrate -- --write           also write the new spreadsheet (SPREADSHEET_ID / local store)
+//   npm run migrate -- --write           also write the database (DATABASE_URL, or local PGlite)
+//   npm run migrate -- --write --force   keep games already entered through the app and re-import the rest
 //   npm run migrate -- --csv-dir ./old   read CSV exports (Games.csv, Decks.csv, ...) instead of the API
 //   npm run migrate -- --no-scryfall     skip commander lookups
 //
 // The old sheet is only read. Rerunnable until cutover: migrated rows have
 // stable ids (m_..., d_...), and players' emails/roles and commanders already
-// linked in the new sheet are kept.
+// linked in the database are kept. Parsing lives in lib/migrate.ts; writing in
+// lib/db/import.ts.
 import "./env";
 import fs from "node:fs";
 import path from "node:path";
 import { parseCsv } from "../lib/csv";
+import { openForScripts } from "../lib/db";
+import { ensureDefaultGroup } from "../lib/db/group";
+import { importMigration } from "../lib/db/import";
 import { migrate, type Grid, type MigrationResult } from "../lib/migrate";
-import { parse, serialize, type GameWithSeats } from "../lib/schema";
+import type { GameWithSeats } from "../lib/schema";
 import { commanderQuery, identityOf, search } from "../lib/scryfall";
 import { playerStats, seatStats } from "../lib/stats";
-import { getStore } from "../lib/store";
-import { SheetsStore } from "../lib/store/sheets";
+import { OldSheetReader } from "./old-sheet";
 
 const args = process.argv.slice(2);
 const flag = (f: string) => args.includes(f);
@@ -45,7 +49,7 @@ async function readOld(): Promise<Record<keyof typeof OLD_TABS, Grid>> {
   const id = process.env.OLD_SPREADSHEET_ID;
   const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
   if (!id || !key) throw new Error("Set OLD_SPREADSHEET_ID and GOOGLE_SERVICE_ACCOUNT_KEY, or pass --csv-dir");
-  const old = new SheetsStore(id, key, ["https://www.googleapis.com/auth/spreadsheets.readonly"]);
+  const old = new OldSheetReader(id, key);
   for (const [k, tab] of Object.entries(OLD_TABS)) {
     try {
       out[k as keyof typeof OLD_TABS] = await old.readValues(tab);
@@ -153,70 +157,22 @@ async function main() {
   console.log(`Wrote migration-report.md (${mismatches} player mismatches, ${res.warnings.length} warnings).`);
 
   if (!flag("--write")) {
-    console.log("Dry run only. Re-run with --write to write the new spreadsheet.");
+    console.log("Dry run only. Re-run with --write to write the database.");
     return;
   }
 
-  // ---- write, keeping anything already curated in the new sheet
-  const store = getStore();
-  await store.ensureTabs();
-  const current = {
-    players: (await store.getRows("Players")).map((r) => parse.player(r.data)),
-    decks: (await store.getRows("Decks")).map((r) => parse.deck(r.data)),
-    cmds: (await store.getRows("DeckCommanders")).map((r) => parse.deckCommander(r.data)),
-    games: (await store.getRows("Games")).map((r) => parse.game(r.data)),
-    seats: (await store.getRows("GameSeats")).map((r) => parse.seat(r.data)),
-    wcs: (await store.getRows("WinConditions")).map((r) => parse.lookup(r.data)),
-    rules: (await store.getRows("Rules")).map((r) => parse.lookup(r.data)),
-  };
-  const appGames = current.games.filter((g) => !g.game_id.startsWith("m_"));
-  if (appGames.length && !flag("--force")) {
-    throw new Error(
-      `The new sheet already has ${appGames.length} games entered through the app. Re-run with --force to keep them and re-import the rest.`,
+  // ---- write into Postgres, keeping anything already curated there
+  const h = await openForScripts();
+  try {
+    const { group } = await ensureDefaultGroup(h.db);
+    const merged = await importMigration(h.db, group.id, res, { force: flag("--force") });
+    for (const w of merged.warnings) console.warn(w);
+    console.log(
+      `Wrote ${res.games.length} games${merged.appGames ? ` (kept ${merged.appGames} entered through the app)` : ""} into group "${group.name}" (${h.kind === "neon" ? "DATABASE_URL" : ".data/pglite"}).`,
     );
+  } finally {
+    await h.close();
   }
-
-  const players = res.players.map((p) => current.players.find((c) => c.player_id === p.player_id) ?? p);
-  players.push(...current.players.filter((c) => !players.some((p) => p.player_id === c.player_id)));
-
-  const decks = res.decks.map((d) => {
-    const c = current.decks.find((x) => x.deck_id === d.deck_id);
-    return c ? { ...d, commander_status: c.commander_status, bracket: c.bracket || d.bracket, notes: c.notes || d.notes, active: c.active } : d;
-  });
-  decks.push(...current.decks.filter((c) => !decks.some((d) => d.deck_id === c.deck_id)));
-
-  // Commanders: keep the new sheet's links for decks it already has.
-  const curatedDecks = new Set(current.cmds.filter((c) => c.scryfall_oracle_id).map((c) => c.deck_id));
-  const cmds = [
-    ...res.deckCommanders.filter((c) => !curatedDecks.has(c.deck_id)),
-    ...current.cmds.filter((c) => curatedDecks.has(c.deck_id) || !res.decks.some((d) => d.deck_id === c.deck_id)),
-  ];
-  for (const d of decks) if (curatedDecks.has(d.deck_id)) d.commander_status = current.decks.find((x) => x.deck_id === d.deck_id)?.commander_status ?? d.commander_status;
-
-  const mergeLookups = (a: typeof res.rules, b: typeof res.rules) => [...b, ...a.filter((x) => !b.some((y) => y.id === x.id))];
-
-  await store.replaceAll("Players", players.map(serialize.player));
-  await store.replaceAll("Decks", decks.map(serialize.deck));
-  await store.replaceAll("DeckCommanders", cmds.map(serialize.deckCommander));
-  await store.replaceAll("WinConditions", mergeLookups(res.winConditions, current.wcs).map(serialize.lookup));
-  await store.replaceAll("Rules", mergeLookups(res.rules, current.rules).map(serialize.lookup));
-  await store.replaceAll("Games", [...res.games, ...appGames].map(serialize.game));
-  await store.replaceAll(
-    "GameSeats",
-    [...res.seats, ...current.seats.filter((s) => appGames.some((g) => g.game_id === s.game_id))].map(serialize.seat),
-  );
-  await store.appendRows("AuditLog", [
-    {
-      timestamp: new Date().toISOString(),
-      user: "import",
-      entity: "migration",
-      entity_id: "",
-      action: "import",
-      before: "",
-      after: JSON.stringify({ games: res.games.length, decks: res.decks.length, players: res.players.length }),
-    },
-  ]);
-  console.log("Wrote the new spreadsheet.");
 }
 
 main().catch((e) => {

@@ -1,11 +1,16 @@
-// Fills the local JSON store (.data/db.json) with sample data for development.
+// Fills the local database with sample data for development. Replaces the
+// default group's players, decks, lookups and games each time it runs.
 // Sign in with DEV_LOGIN=true as henry@example.com (admin) or sam@example.com.
 import "./env";
-import { LocalStore } from "../lib/store/local";
-import { serialize, type Game, type GameSeat } from "../lib/schema";
+import { openForScripts } from "../lib/db";
+import { ensureDefaultGroup } from "../lib/db/group";
+import { replaceGroupData } from "../lib/db/import";
+import type { Game, GameSeat } from "../lib/schema";
 
 async function main() {
-  const store = new LocalStore();
+  if (process.env.DATABASE_URL && !process.argv.includes("--yes")) {
+    throw new Error("DATABASE_URL is set, so this would overwrite that database. Unset it to seed local PGlite, or pass --yes.");
+  }
   const players = [
     { player_id: "henry", display_name: "Henry", email: "henry@example.com", role: "admin" as const, active: true },
     { player_id: "sam", display_name: "Sam", email: "sam@example.com", role: "player" as const, active: true },
@@ -77,18 +82,35 @@ async function main() {
     }
   }
 
-  await store.replaceAll("Players", players.map(serialize.player));
-  await store.replaceAll("Decks", decks.map(serialize.deck));
-  await store.replaceAll(
-    "DeckCommanders",
-    decks.map((d) => serialize.deckCommander({ deck_id: d.deck_id, slot: 1, role: "commander", scryfall_oracle_id: "", card_name: "", typed_name: d.name })),
-  );
-  await store.replaceAll("WinConditions", wcs);
-  await store.replaceAll("Rules", rules);
-  await store.replaceAll("Games", games.map(serialize.game));
-  await store.replaceAll("GameSeats", seats.map(serialize.seat));
-  await store.replaceAll("AuditLog", []);
-  console.log(`Seeded ${players.length} players, ${decks.length} decks, ${games.length} games into .data/db.json`);
+  const h = await openForScripts();
+  try {
+    const { group } = await ensureDefaultGroup(h.db);
+    await h.db.transaction((tx) =>
+      replaceGroupData(tx, group.id, {
+        players,
+        decks,
+        deckCommanders: decks.map((d) => ({
+          deck_id: d.deck_id,
+          slot: 1,
+          role: "commander",
+          scryfall_oracle_id: "",
+          card_name: "",
+          typed_name: d.name,
+        })),
+        winConditions: wcs,
+        rules,
+        games,
+        seats,
+      }),
+    );
+    const where = h.kind === "neon" ? "DATABASE_URL" : ".data/pglite";
+    console.log(`Seeded ${players.length} players, ${decks.length} decks, ${games.length} games into "${group.name}" (${where}).`);
+  } finally {
+    await h.close();
+  }
 }
 
-main();
+main().catch((e) => {
+  console.error(e?.message ?? e);
+  process.exit(1);
+});

@@ -7,7 +7,7 @@ export default async function Audit() {
   return (
     <div className="stack">
       <h1>Audit log</h1>
-      <p className="small muted">Latest 300 changes, newest first. Full history is in the AuditLog tab.</p>
+      <p className="small muted">Latest 300 changes, newest first. Full history is in the audit_log table.</p>
       <div className="table-wrap card" style={{ padding: 0 }}>
         <table>
           <thead>
