@@ -245,11 +245,11 @@ export function seedFor(seeds: Record<string, unknown> | undefined, deck: Pick<D
 export interface MigrateOptions {
   commanderSeeds?: Record<string, unknown>;
   /**
-   * The old sheet only writes a bracket when it changes: the "Bracket(s)" cell is
-   * blank for ~95% of games, and runs of "5" end with an explicit "3" (e.g. a 5,5,5
-   * night followed by "3" on the next game). Its own stats read the fill-down
-   * "BracketFilled" helper, i.e. a blank bracket means "same as the previous game".
-   * Default true so stats filtered by bracket match the old sheet.
+   * The old sheet's "Bracket(s)" cell is blank for ~95% of games, and its own
+   * stats read the fill-down "BracketFilled" helper, i.e. a blank bracket means
+   * "same as the previous game". The owner decided against carrying that over:
+   * by default (false) a blank bracket imports as no bracket. True restores the
+   * fill-down, e.g. to reproduce the old sheet's bracket-filtered stats.
    */
   stickyBrackets?: boolean;
   /**
@@ -269,7 +269,7 @@ const seatRef = (v: string) => {
 
 export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResult {
   const warnings: string[] = [];
-  const stickyBrackets = opts.stickyBrackets ?? true;
+  const stickyBrackets = opts.stickyBrackets ?? false;
   const stickyRules = opts.stickyRules ?? false;
 
   // Players: Decks header row + Data tab player list.
@@ -300,7 +300,7 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
   const playerId = (name: string) => {
     const t = name.trim();
     if (!t) return "";
-    if (t.toUpperCase() === GUEST_PLAYER_ID || /^guest$/i.test(t)) return GUEST_PLAYER_ID;
+    if (t.toUpperCase() === GUEST_PLAYER_ID || /^guest$/i.test(t) || /^(random|guest)[\s_-]*seat[\s_#-]*\d+$/i.test(t)) return GUEST_PLAYER_ID;
     if (!idByName.has(t.toLowerCase())) {
       addName(t);
       const id = slugify(t);
@@ -375,15 +375,53 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
     if (!warnings.includes(msg)) warnings.push(msg);
     return near[0];
   };
+  /**
+   * Borrowed decks: a cell ending in "(<another player's name>)", e.g.
+   * "🟦🟥⬜Tidus (Sam)" in Alex's column, is Sam's Tidus played by Alex.
+   * Other parentheses ("Vex(Precon)") are part of the nickname.
+   */
+  const borrowedFrom = (pilot: string, cell: string) => {
+    const m = cell.trim().match(/^(.*\S)\s*\(([^()]+)\)$/u);
+    if (!m) return undefined;
+    const owner = idByName.get(m[2].trim().toLowerCase());
+    if (!owner || owner === pilot) return undefined;
+    return { owner, cell: m[1] };
+  };
+  /** The owner's deck for a borrowed cell, ignoring color/emoji differences; created (with a warning) if missing. */
+  const lenderDeck = (owner: string, cell: string, raw: string) => {
+    const hit = findOwnDeck(owner, cell);
+    if (hit) return hit;
+    const { colors, name } = splitDeckCell(cell);
+    const same = decks.filter((d) => d.owner_player_id === owner && d.name.toLowerCase() === name.toLowerCase());
+    if (same.length) {
+      const pick = same.find((d) => d.colors === colors) ?? same[0];
+      if (same.length > 1) warnings.push(`Borrowed deck "${raw}": ${owner} has ${same.length} decks named "${name}"; used ${pick.colors} one.`);
+      return pick;
+    }
+    const msg = `Borrowed deck "${raw}": ${owner} has no "${name}" in the Decks tab; added for them.`;
+    if (!warnings.includes(msg)) warnings.push(msg);
+    return addDeck(owner, cell)!;
+  };
+
+  const borrowedCells: { owner: string; cell: string; raw: string }[] = [];
   deckHeader.forEach((name, ci) => {
     if (!name.trim() || isLabel(name) || name.trim().toUpperCase() === GUEST_PLAYER_ID) return;
     const owner = playerId(name);
-    for (const row of old.decks.slice(1)) if (row[ci]?.trim()) addDeck(owner, row[ci]);
+    for (const row of old.decks.slice(1)) {
+      if (!row[ci]?.trim()) continue;
+      const b = borrowedFrom(owner, row[ci]);
+      // Not a deck of the column's player; resolved once every owner's list is read.
+      if (b) borrowedCells.push({ ...b, raw: row[ci].trim() });
+      else addDeck(owner, row[ci]);
+    }
   });
+  for (const b of borrowedCells) lenderDeck(b.owner, b.cell, b.raw);
 
   // DeckDetails and the Data tab's Player/Deck/Bracket table: bracket + notes.
   for (const r of [...deckTable(old.deckDetails), ...deckTable(old.data)]) {
     if (!r.bracket && !r.notes) continue;
+    // A borrower's row doesn't annotate the owner's deck; the owner's own row does.
+    if (borrowedFrom(playerId(r.player), r.deck)) continue;
     const d = findOwnDeck(playerId(r.player), r.deck);
     if (!d) {
       warnings.push(`Deck details for "${r.deck}" (${r.player}) don't match a deck in the Decks tab; ignored.`);
@@ -488,6 +526,7 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
       .map((row, idx) => ({ ...row, order: Number(cell(row.r, "seat")) || idx + 1 }))
       .sort((a, b) => a.order - b.order);
 
+    const guestNotes: string[] = [];
     const gameSeats: GameSeat[] = ordered.map(({ r }, idx) => {
       const name = cell(r, "player");
       const deckCell = cell(r, "deck");
@@ -496,8 +535,12 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
       if (!name) warnings.push(`${label}: seat ${idx + 1} has deck "${deckCell}" but no player; imported as a guest (${GUEST_PLAYER_ID}).`);
       const pid = name ? playerId(name) : GUEST_PLAYER_ID;
       let deck_id = "";
-      // Guests' decks (free text like "Caesar - <guest name>") are not imported.
-      if (pid !== GUEST_PLAYER_ID && deckCell) {
+      const borrowed = pid !== GUEST_PLAYER_ID && deckCell ? borrowedFrom(pid, deckCell) : undefined;
+      // Guests' decks (free text like "Caesar - <guest name>") are not imported as
+      // decks; the text is kept in the game's notes instead (below).
+      if (pid === GUEST_PLAYER_ID && deckCell) guestNotes.push(`Guest seat ${idx + 1}: ${deckCell}`);
+      if (borrowed) deck_id = lenderDeck(borrowed.owner, borrowed.cell, deckCell).deck_id;
+      else if (pid !== GUEST_PLAYER_ID && deckCell) {
         const own = findOwnDeck(pid, deckCell);
         if (own) deck_id = own.deck_id;
         else {
@@ -573,7 +616,7 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
       brackets: [...brackets],
       win_conditions: [...new Set(splitMulti(first("winConditions")).map((w) => lookupId(winConditions, w)))],
       additional_rules: [...additional_rules],
-      notes: g.rows.map(({ r }) => cell(r, "notes")).filter(Boolean).join(" · "),
+      notes: [g.rows.map(({ r }) => cell(r, "notes")).filter(Boolean).join(" · "), ...guestNotes].filter(Boolean).join("\n"),
       submitted_by: "import",
       approved_by: "import",
       rev: 1,
