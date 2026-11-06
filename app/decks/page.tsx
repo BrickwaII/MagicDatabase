@@ -28,16 +28,18 @@ export default async function Decks({ searchParams }: { searchParams: Promise<{ 
   }
   const name = (id: string) => players.find((p) => p.player_id === id)?.display_name ?? id;
 
+  const viewingAll = owner === "all";
+  const emptyTitle = viewingAll ? "No decks yet" : owner === me.player_id ? "You have no decks yet" : `${name(owner)} has no decks yet`;
   return (
     <div className="stack">
-      <div className="spread">
+      <div className="page-head">
         <h1>Decks</h1>
         <Link className="btn primary" href="/decks/new">
           + Add deck
         </Link>
       </div>
-      <form className="row" method="get">
-        <select name="owner" defaultValue={owner}>
+      <form className="deck-filter" method="get">
+        <select name="owner" defaultValue={owner} aria-label="Whose decks">
           <option value="all">Everyone</option>
           {players.map((p) => (
             <option key={p.player_id} value={p.player_id}>
@@ -45,54 +47,61 @@ export default async function Decks({ searchParams }: { searchParams: Promise<{ 
             </option>
           ))}
         </select>
-        <label className="row small">
+        <label className="check small">
           <input type="checkbox" name="retired" value="1" defaultChecked={!!sp.retired} /> Show retired
         </label>
         <button type="submit">Show</button>
       </form>
-      <div className="table-wrap card" style={{ padding: 0 }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Deck</th>
-              {owner === "all" && <th>Owner</th>}
-              <th>Commander</th>
-              <th className="num">Bracket</th>
-              <th className="num">Games</th>
-              <th className="num">Win %</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {decks.map((d) => {
-              const t = totals.get(d.deck_id);
-              return (
-                <tr key={d.deck_id} style={{ opacity: d.active ? 1 : 0.55 }}>
-                  <td>
-                    <Pips colors={d.colors} /> <strong>{d.name}</strong>
-                  </td>
-                  {owner === "all" && <td>{name(d.owner_player_id)}</td>}
-                  <td>
-                    {(cmdsByDeck.get(d.deck_id) ?? []).join(" + ") || <span className="muted">—</span>}
-                    {d.commander_status === "unresolved" && <span className="badge pending"> unlinked</span>}
-                  </td>
-                  <td className="num">{d.bracket || "—"}</td>
-                  <td className="num">{t?.games ?? 0}</td>
-                  <td className="num">{t?.games ? `${Math.round((t.wins / t.games) * 100)}%` : "—"}</td>
-                  <td>{canEditDeck(me, d) && <Link href={`/decks/${d.deck_id}`}>Edit</Link>}</td>
-                </tr>
-              );
-            })}
-            {decks.length === 0 && (
-              <tr>
-                <td colSpan={7} className="muted">
-                  No decks yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      {decks.length === 0 ? (
+        <div className="empty">
+          <strong>{emptyTitle}</strong>
+          Add a deck once and it&apos;s ready to pick every time you log a game.
+          <div>
+            <Link className="btn primary" href="/decks/new">
+              Add a deck
+            </Link>
+          </div>
+        </div>
+      ) : (
+        <ul className="deck-list">
+          {decks.map((d) => {
+            const t = totals.get(d.deck_id);
+            const cmd = (cmdsByDeck.get(d.deck_id) ?? []).join(" + ");
+            return (
+              <li key={d.deck_id} className={`card deck${d.active ? "" : " retired"}`}>
+                <div className="deck-name">
+                  <Pips colors={d.colors} /> <span>{d.name}</span>
+                </div>
+                {canEditDeck(me, d) && (
+                  <Link className="btn deck-edit" href={`/decks/${d.deck_id}`} aria-label={`Edit ${d.name}`}>
+                    Edit
+                  </Link>
+                )}
+                <div className="deck-cmd">
+                  {cmd || "No commander set"}
+                  {d.commander_status === "unresolved" && (
+                    <>
+                      {" "}
+                      <span className="badge pending">Not linked</span>
+                    </>
+                  )}
+                </div>
+                <div className="deck-meta">
+                  {viewingAll && <span>{name(d.owner_player_id)}</span>}
+                  <span>
+                    <b>{t?.games ?? 0}</b> game{t?.games === 1 ? "" : "s"}
+                  </span>
+                  <span>
+                    <b>{t?.games ? `${Math.round((t.wins / t.games) * 100)}%` : "–"}</b> win rate
+                  </span>
+                  {d.bracket && <span>Bracket {d.bracket}</span>}
+                  {!d.active && <span>Retired</span>}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

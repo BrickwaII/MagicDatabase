@@ -12,7 +12,7 @@ export default async function NewGame() {
     listRules(),
   ]);
   return (
-    <div className="stack">
+    <div className="stack form-page">
       <h1>Log a game</h1>
       <GameForm
         players={players}

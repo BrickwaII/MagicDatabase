@@ -262,7 +262,7 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
   return (
     <form className="stack" onSubmit={submit}>
       <div className="card stack">
-        <div className="row">
+        <div className="deck-top">
           {admin && (
             <label>
               <span className="lbl">Owner</span>
@@ -275,7 +275,7 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
               </select>
             </label>
           )}
-          <label style={{ flex: 1 }}>
+          <label className="deck-top-name">
             <span className="lbl">Deck nickname</span>
             <input value={name} onChange={(e) => setName(e.target.value)} required style={{ width: "100%" }} placeholder="e.g. Tifa" />
           </label>
@@ -340,6 +340,7 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
                 <label key={c} className={`chip${on ? " on" : ""}`}>
                   <input
                     type="checkbox"
+                    className="sr-only"
                     checked={on}
                     onChange={() =>
                       setManualColors((m) =>
@@ -361,7 +362,7 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
       </label>
 
       {deckId && (
-        <label className="row">
+        <label className="check">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
           Active (uncheck to retire the deck; its games keep counting)
         </label>
@@ -369,9 +370,13 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
       {!resolved && hasSlot(first) && (
         <p className="small notice">This deck will be saved as unresolved; an admin can link the real card later.</p>
       )}
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
       <div>
-        <button className="primary" disabled={pending}>
+        <button className={`primary big${pending ? " is-pending" : ""}`} disabled={pending} aria-busy={pending}>
           {pending ? "Saving…" : deckId ? "Save deck" : "Add deck"}
         </button>
       </div>

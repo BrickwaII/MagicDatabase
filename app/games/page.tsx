@@ -21,57 +21,86 @@ export default async function Games({ searchParams }: { searchParams: Promise<SP
     loadNames(),
   ]);
   const shown = games.slice(0, 200);
+  const filtered = !!(sp.from || sp.to || sp.date || sp.player || sp.status);
+  const activeCount = [sp.from || sp.date, sp.to, sp.player, sp.status].filter(Boolean).length;
   return (
     <div className="stack">
-      <div className="spread">
+      <div className="page-head">
         <h1>Games</h1>
-        <Link className="btn primary" href="/games/new">
-          + Log a game
-        </Link>
       </div>
-      <form className="card row" method="get">
-        <label>
-          <span className="lbl">From</span>
-          <input type="date" name="from" defaultValue={sp.from} />
-        </label>
-        <label>
-          <span className="lbl">To</span>
-          <input type="date" name="to" defaultValue={sp.to} />
-        </label>
-        <label>
-          <span className="lbl">Player</span>
-          <select name="player" defaultValue={sp.player ?? ""}>
-            <option value="">Anyone</option>
-            {players.map((p) => (
-              <option key={p.player_id} value={p.player_id}>
-                {p.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span className="lbl">Status</span>
-          <select name="status" defaultValue={sp.status ?? ""}>
-            <option value="">Any</option>
-            <option value="approved">Approved</option>
-            <option value="pending">Pending</option>
-            <option value="rejected">Rejected</option>
-          </select>
-        </label>
-        <button type="submit">Filter</button>
-        <Link href="/games" className="small">
-          Clear
-        </Link>
-      </form>
-      <p className="muted small">
-        {games.length} game{games.length === 1 ? "" : "s"}
-        {games.length > shown.length && `, showing the latest ${shown.length}`}
-      </p>
-      <div className="stack">
-        {shown.map((g) => (
-          <GameCard key={g.game_id} game={g} names={names} />
-        ))}
-      </div>
+      <details className="card" open={filtered}>
+        <summary>
+          Filter
+          <span className="summary-hint">
+            {games.length} game{games.length === 1 ? "" : "s"}
+            {activeCount > 0 && `, ${activeCount} filter${activeCount === 1 ? "" : "s"} on`}
+          </span>
+        </summary>
+        <form className="filters" method="get" style={{ marginTop: 14 }}>
+          <label>
+            <span className="lbl">From</span>
+            <input type="date" name="from" defaultValue={sp.from} />
+          </label>
+          <label>
+            <span className="lbl">To</span>
+            <input type="date" name="to" defaultValue={sp.to} />
+          </label>
+          <label>
+            <span className="lbl">Player</span>
+            <select name="player" defaultValue={sp.player ?? ""}>
+              <option value="">Anyone</option>
+              {players.map((p) => (
+                <option key={p.player_id} value={p.player_id}>
+                  {p.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="lbl">Status</span>
+            <select name="status" defaultValue={sp.status ?? ""}>
+              <option value="">Any</option>
+              <option value="approved">Approved</option>
+              <option value="pending">Pending</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </label>
+          <div className="filter-actions">
+            <button type="submit" className="primary">
+              Apply
+            </button>
+            {filtered && (
+              <Link href="/games" className="btn">
+                Clear
+              </Link>
+            )}
+          </div>
+        </form>
+      </details>
+      {games.length > shown.length && <p className="muted small">Showing the latest {shown.length} of {games.length}.</p>}
+      {shown.length === 0 ? (
+        <div className="empty">
+          <strong>{filtered ? "No games match these filters" : "No games yet"}</strong>
+          {filtered ? "Try a wider date range or a different player." : "Log your first game and it will show up here."}
+          <div>
+            {filtered ? (
+              <Link className="btn" href="/games">
+                Clear filters
+              </Link>
+            ) : (
+              <Link className="btn primary" href="/games/new">
+                Log a game
+              </Link>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="game-grid">
+          {shown.map((g) => (
+            <GameCard key={g.game_id} game={g} names={names} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
