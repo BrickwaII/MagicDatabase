@@ -31,7 +31,7 @@ Players sign in with Google. You need one OAuth client.
 
 1. In the Vercel project: **Storage → Create → Neon** (Postgres). Pick the Free plan and a region near you (e.g. US West).
 2. Connect it to the project for **Production** (and **Preview** if you like; tick "Create database branch for deployment → Preview" so preview deploys never touch real data).
-3. This sets `DATABASE_URL` and `DATABASE_URL_UNPOOLED` for you. Nothing to paste.
+3. This sets `DATABASE_URL` and `DATABASE_URL_UNPOOLED` for you. Nothing to paste. (If the connect dialog offers an environment-variable prefix, leave it empty; the app looks for exactly these names.)
 
 ## 4. Environment variables (≈3 min)
 
@@ -64,11 +64,15 @@ On your computer:
 git clone https://github.com/BrickwaII/MagicDatabase.git && cd MagicDatabase
 npm install
 npx vercel link            # pick the project you just made
-npx vercel env pull .env.local   # brings down DATABASE_URL etc.
+npx vercel env pull .env.local --environment=production   # brings down the live DATABASE_URL etc.
 npm run setup -- --admin you@gmail.com "Henry"
 ```
 
 That creates "Henry's Playgroup" and makes your Google email the first admin. Safe to rerun.
+
+Check that setup printed **`Database ready (DATABASE_URL)`**. If it says `.data/pglite` instead, the pull didn't bring down the database URL (without `--environment=production` it pulls the Development variables, which the Neon connection from step 3 may not include) and nothing reached the live site: fix the pull and run setup again. Use the same name as your column in the old sheet ("Henry") so the import matches you to your games.
+
+While this `.env.local` is in place, every command in this folder talks to the live database. Don't use it for `npm run dev`; delete it (or copy `.env.example` back over it) when you're done with this step.
 
 **Import the old games.** Easiest route, no extra Google setup: in "Magic Records - 2026", use **File → Download → Comma-separated values** on each of these tabs and put the files in a folder named `old/` inside the repo folder, named exactly:
 `Games.csv`, `Decks.csv`, `DeckDetails.csv`, `Data.csv`, `Player Statistics.csv`, `Turn Order Statistics.csv`.
@@ -76,7 +80,7 @@ That creates "Henry's Playgroup" and makes your Google email the first admin. Sa
 ```bash
 npm run migrate -- --csv-dir ./old            # dry run: writes migration-report.md, changes nothing
 # read migration-report.md: per-player totals vs the old sheet
-npm run migrate -- --csv-dir ./old --write    # import for real
+npm run migrate -- --csv-dir ./old --write    # import for real; the last line should end in "(DATABASE_URL)."
 ```
 
 The import was already checked against a copy of your sheet from November 2026: under the old sheet's own filters, 17 of 19 players match exactly and the other two differ only where old rows were broken. Do this step on the day you switch over. If games get logged in the old sheet afterwards, rerun it until your first game is entered in the app; after that it refuses without `--force`.

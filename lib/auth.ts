@@ -34,8 +34,12 @@ export const authOptions: NextAuthOptions = {
   pages: { signIn: "/login", error: "/login" },
   callbacks: {
     // The invite list is the players table: only active players with a matching email get in.
-    async signIn({ user }) {
+    async signIn({ user, account, profile }) {
       if (!user.email) return false;
+      // Google can return an address the account holder never verified; don't match those against the invite list.
+      if (account?.provider === "google" && (profile as { email_verified?: boolean } | undefined)?.email_verified !== true) {
+        return "/login?error=NotInvited";
+      }
       return (await getPlayerByEmail(user.email)) ? true : "/login?error=NotInvited";
     },
   },

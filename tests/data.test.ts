@@ -110,6 +110,17 @@ describe("games", () => {
     const audit = (await db.select().from(auditLog).where(eq(auditLog.groupId, gid))).map((r) => r.action);
     expect(audit).toEqual(expect.arrayContaining(["create", "reject", "approve"]));
   });
+
+  it("refuses to approve or reject a version the admin hasn't seen", async () => {
+    const g = await createGame(await input(), sam);
+    const seenRev = g.rev;
+    await updateGame(g.game_id, await input({ notes: "changed after Henry loaded the queue" }), seenRev, sam);
+    await expect(approveGame(g.game_id, henry, seenRev)).rejects.toBeInstanceOf(StaleError);
+    await expect(rejectGame(g.game_id, henry, "nope", seenRev)).rejects.toBeInstanceOf(StaleError);
+    expect((await getGame(g.game_id))!.status).toBe("pending");
+    await approveGame(g.game_id, henry, seenRev + 1);
+    expect((await getGame(g.game_id))!.status).toBe("approved");
+  });
 });
 
 describe("rev conflicts", () => {

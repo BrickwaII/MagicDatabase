@@ -11,7 +11,7 @@ export function SignOutButton() {
   );
 }
 
-export function GoogleSignIn() {
+export function GoogleSignIn({ callbackUrl = "/" }: { callbackUrl?: string }) {
   const [busy, setBusy] = useState(false);
   return (
     <button
@@ -19,7 +19,7 @@ export function GoogleSignIn() {
       disabled={busy}
       onClick={() => {
         setBusy(true);
-        signIn("google", { callbackUrl: "/" });
+        signIn("google", { callbackUrl });
       }}
     >
       {busy ? "Opening Google…" : "Sign in with Google"}
@@ -27,7 +27,7 @@ export function GoogleSignIn() {
   );
 }
 
-export function DevSignIn() {
+export function DevSignIn({ callbackUrl = "/" }: { callbackUrl?: string }) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   return (
@@ -36,7 +36,7 @@ export function DevSignIn() {
       onSubmit={(e) => {
         e.preventDefault();
         setBusy(true);
-        signIn("dev", { email, callbackUrl: "/" });
+        signIn("dev", { email, callbackUrl });
       }}
     >
       <input

@@ -7,6 +7,7 @@ import { requirePlayer } from "@/lib/auth";
 import { getGame, listDecks, listPlayers, listRules, listWinConditions } from "@/lib/data";
 import { loadNames } from "@/lib/names";
 import { canEditGame, isAdmin } from "@/lib/permissions";
+import { playerOptions } from "@/lib/schema";
 
 export default async function GamePage({
   params,
@@ -42,7 +43,7 @@ export default async function GamePage({
           </a>
         </div>
         <GameForm
-          players={players}
+          players={playerOptions(players)}
           decks={decks}
           winConditions={winConditions}
           rules={rules}
@@ -84,6 +85,7 @@ export default async function GamePage({
             {game.status !== "approved" && (
               <form action={approveGameAction}>
                 <input type="hidden" name="id" value={id} />
+                <input type="hidden" name="rev" value={game.rev} />
                 <SubmitButton className="primary" pendingText="Approving…">
                   Approve
                 </SubmitButton>
@@ -99,6 +101,7 @@ export default async function GamePage({
           {game.status !== "rejected" && (
             <form action={rejectGameAction} className="queue-actions">
               <input type="hidden" name="id" value={id} />
+              <input type="hidden" name="rev" value={game.rev} />
               <div className="reject">
                 <input name="reason" placeholder="Reason for rejecting" aria-label="Reason for rejecting" required />
                 <SubmitButton className="danger" pendingText="Rejecting…">

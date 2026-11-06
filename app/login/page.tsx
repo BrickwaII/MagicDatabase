@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { DevSignIn, GoogleSignIn } from "@/components/AuthButtons";
 import { PodMark } from "@/components/Icons";
 import { devLoginEnabled, getCurrentPlayer } from "@/lib/auth";
+import { safeCallbackPath } from "@/lib/util";
 
 const MESSAGES: Record<string, string> = {
   NotInvited: "That Google account isn't on the invite list. Ask Henry to add your email.",
@@ -11,9 +12,10 @@ const MESSAGES: Record<string, string> = {
 
 export const metadata = { title: "Sign in" };
 
-export default async function Login({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
-  if (await getCurrentPlayer()) redirect("/");
-  const { error } = await searchParams;
+export default async function Login({ searchParams }: { searchParams: Promise<{ error?: string; callbackUrl?: string }> }) {
+  const { error, callbackUrl } = await searchParams;
+  const next = safeCallbackPath(callbackUrl);
+  if (await getCurrentPlayer()) redirect(next);
   const google = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
   return (
     <div className="signin">
@@ -28,13 +30,13 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
             {MESSAGES[error] ?? "Sign-in didn't work. Try again."}
           </div>
         )}
-        {google ? <GoogleSignIn /> : <p className="notice small">Google sign-in isn&apos;t set up yet.</p>}
+        {google ? <GoogleSignIn callbackUrl={next} /> : <p className="notice small">Google sign-in isn&apos;t set up yet.</p>}
         {devLoginEnabled() && (
           <div className="stack">
             <p className="small muted" style={{ margin: 0 }}>
               Development sign-in (off in production)
             </p>
-            <DevSignIn />
+            <DevSignIn callbackUrl={next} />
           </div>
         )}
       </div>

@@ -41,9 +41,22 @@ export async function saveGame(payload: { id?: string; rev?: number; input: Game
   return res;
 }
 
+/** The rev the admin saw when the page was rendered (hidden "rev" field), if sent. */
+function formRev(formData: FormData): number | undefined {
+  const raw = formData.get("rev");
+  const n = Number(raw);
+  return raw !== null && raw !== "" && Number.isInteger(n) ? n : undefined;
+}
+
 export async function approveGameAction(formData: FormData) {
   const actor = await requireAdmin();
-  await approveGame(String(formData.get("id")), actor);
+  const id = String(formData.get("id"));
+  try {
+    await approveGame(id, actor, formRev(formData));
+  } catch (e) {
+    if (e instanceof AppError) redirect(`/queue?error=${encodeURIComponent(e.message)}#${id}`);
+    throw e;
+  }
   revalidatePath("/", "layout");
 }
 
@@ -52,7 +65,7 @@ export async function rejectGameAction(formData: FormData) {
   const id = String(formData.get("id"));
   const reason = String(formData.get("reason") ?? "");
   try {
-    await rejectGame(id, actor, reason);
+    await rejectGame(id, actor, reason, formRev(formData));
   } catch (e) {
     if (e instanceof AppError) redirect(`/queue?error=${encodeURIComponent(e.message)}#${id}`);
     throw e;

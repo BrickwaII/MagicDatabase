@@ -518,12 +518,17 @@ export async function updateGame(id: string, input: GameInput, expectedRev: numb
   );
 }
 
-async function setGameStatus(id: string, actor: Player, status: Game["status"], reason = "") {
+/**
+ * Approve or reject. `expectedRev` is the rev the admin was looking at: if the
+ * game was edited since, the change is refused so an unseen edit isn't approved.
+ */
+async function setGameStatus(id: string, actor: Player, status: Game["status"], reason = "", expectedRev?: number) {
   if (!canApprove(actor)) throw new AppError("Only admins can approve or reject games");
   const { db, gid } = await ctx();
   return db.transaction(async (tx) => {
     const { seats: _s, ...before } = (await lockGame(tx, gid, id)) as GameWithSeats;
     void _s;
+    if (expectedRev !== undefined && before.rev !== expectedRev) throw new StaleError();
     const next: Game = {
       ...before,
       status,
@@ -549,10 +554,11 @@ async function setGameStatus(id: string, actor: Player, status: Game["status"], 
   });
 }
 
-export const approveGame = (id: string, actor: Player) => setGameStatus(id, actor, "approved");
-export async function rejectGame(id: string, actor: Player, reason: string) {
+export const approveGame = (id: string, actor: Player, expectedRev?: number) =>
+  setGameStatus(id, actor, "approved", "", expectedRev);
+export async function rejectGame(id: string, actor: Player, reason: string, expectedRev?: number) {
   if (!reason.trim()) throw new AppError("Give a reason for rejecting");
-  return setGameStatus(id, actor, "rejected", reason);
+  return setGameStatus(id, actor, "rejected", reason, expectedRev);
 }
 
 export async function deleteGame(id: string, actor: Player) {
