@@ -534,3 +534,6 @@ a.deck-name:hover span:last-child { text-decoration: underline; }
   .version-note { grid-column: 1 / -1; }
 }
 .seat-player.guest { white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
+
+/* Public share page: same header as a game card, but not a link. */
+.game-head.static:hover { background: none; }
