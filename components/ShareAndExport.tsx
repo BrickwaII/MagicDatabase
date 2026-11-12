@@ -16,7 +16,7 @@ export async function ShareAndExport() {
         </div>
         <p className="small muted">
           Anyone with the link can see player, deck and turn-order stats and the last 20 approved games, without signing in.
-          It never shows emails, notes, or pending or rejected games.
+          It never shows emails, notes, guests' names or decks, deck list links or change notes, or pending or rejected games.
         </p>
         {share.enabled && share.token && <CopyShareLink path={`/s/${share.token}`} />}
         <div className="row">
@@ -55,6 +55,9 @@ export async function ShareAndExport() {
           </a>
           <a className="btn" href="/admin/export/decks.csv" download>
             Decks CSV
+          </a>
+          <a className="btn" href="/admin/export/deck-versions.csv" download>
+            Deck changes CSV
           </a>
         </div>
         <p className="small muted">The games CSV has one row per seat, laid out like the old sheet.</p>

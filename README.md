@@ -11,21 +11,24 @@ A website for our Commander group: friends sign in with Google, log games, manag
 
 | Page | What it does |
 | --- | --- |
-| `/games/new` | Log a game: 3–6 seats in turn order, guests (untracked), borrowed decks, shared wins, draws and unfinished games, brackets, win conditions, extra rules, notes |
-| `/games` | Search games by date range, player and status |
+| `/games/new` | Log a game: 3–6 seats in turn order, guests (untracked, with an optional name, the deck they played and who brought them), borrowed decks, shared wins, draws and unfinished games, brackets, win conditions, extra rules, notes |
+| `/games` | Search games by date range, player and status; shows the newest 20, then "Show more" adds 20 at a time (`?shown=`, filters kept) |
 | `/games/:id` | View a game; edit it if you played in it (or you're an admin) |
 | `/queue` | Admin: approve or reject pending games (rejecting needs a reason); decks still waiting to be linked to a real card |
-| `/decks` | Decks per owner with records; add or edit your own |
-| `/stats` | Player, deck and turn-order stats with filters for pod size, bracket (games with no bracket always count), ignored rules and hidden players (Guest hidden by default) |
+| `/decks` | Decks per owner with records and an optional deck list link (Moxfield, Archidekt, any site); add or edit your own |
+| `/decks/:id` | One deck: record against expected, and its version history. The owner (or an admin) can "Log a change" (date, what changed, optional new list link) and edit or delete changes; `?edit=1` edits the deck |
+| `/stats` | Player, deck and turn-order stats with filters for pod size, bracket (games with no bracket always count), ignored rules and hidden players (Guest hidden by default), and "Split by version" for the Decks table |
 | `/admin` | Players and invite list, admin grants, win conditions and rules, public stats link, export; `/admin/audit` shows the change log |
-| `/s/:token` | Public, read-only stats and the last 20 approved games for one group, no sign-in. Admins turn it on, copy or regenerate the link on `/admin`. Never shows emails, notes, pending or rejected games |
-| `/admin/export` | Admin: full JSON backup of the group (emails, notes and audit log included). `/admin/export/games-flat.csv` (one row per seat, like the old sheet), `players.csv` and `decks.csv` |
+| `/s/:token` | Public, read-only stats and the last 20 approved games for one group, no sign-in. Admins turn it on, copy or regenerate the link on `/admin`. Never shows emails, notes, pending or rejected games, deck list links, or guests' names and decks (a guest is just "Guest") |
+| `/admin/export` | Admin: full JSON backup of the group (emails, notes and audit log included). `/admin/export/games-flat.csv` (one row per seat, like the old sheet), `players.csv`, `decks.csv` (with each deck's current version) and `deck-versions.csv` |
 
 ### Rules built in
 
 - A player's submission is `pending` until an admin approves it. An admin's own games are approved straight away.
 - Players can edit any game they sat in. If a player edits an approved game, it goes back to the queue. If an admin edits it, it stays approved.
 - Only approved games where someone won count in stats. Draws and unfinished games are saved but never counted.
+- Win rates are shown next to an expected win rate: the average of 1 / (players in the game) over the same counted games, so a mix of 3- and 4-player pods expects between 25% and 33%. The home page leads with your win rate, "N of M games won" and the difference from expected in points; the stats Players table has an Expected column.
+- Deck versions: logging a change starts a new version of a deck on the date given. A game's version comes from its date (the latest change on or before it), never from the game form, so a game played the day of a change counts toward the new version. Version stats use counted games only, like all stats, and flag versions with fewer than 5 games. The public page can split decks by version but shows only the version number and start date, never notes or links.
 - `day_game_no` is set automatically: the previous game that day plus 1.
 - Each game has a `rev`. If two people edit the same game at once, the second save is refused and they're asked to reload.
 - Every change is written to `audit_log` with who, when, and the before and after values.
@@ -45,10 +48,11 @@ The tables are defined in `lib/db/schema.ts`. SQL migrations generated from it a
 | --- | --- |
 | groups | id, name, created_at, public_stats_enabled, share_token |
 | players | id (slug, e.g. `henry`), display_name, email (unique per group), role, active |
-| decks | id, owner_player_id, name, colors (WUBRG letters), bracket (1–5 or null), notes, commander_status, active |
+| decks | id, owner_player_id, name, colors (WUBRG letters), bracket (1–5 or null), notes, commander_status, active, list_url (optional http(s) link) |
+| deck_versions | id, deck_id, version_no (2, 3, … in started_on order), started_on, note, list_url, created_by, created_at. Version 1 is implicit (no row). |
 | deck_commanders | deck_id, slot (1–2 commanders, 3 companion), role, scryfall_oracle_id, card_name, typed_name |
 | games | id, day_game_no (unique per group and date), date, status, result, brackets (smallint[]), notes, submitted_by, approved_by, rev, reject_reason |
-| game_seats | game_id, seat, player_id, deck_id, is_winner. A guest seat has a null player and deck; the app shows it as `RANDOM`. |
+| game_seats | game_id, seat, player_id, deck_id, is_winner, guest_name, guest_deck, guest_added_by. A guest seat has a null player and deck (the app's `RANDOM`); its optional guest_name, guest_deck (free text) and guest_added_by (a player in the same group) are kept so a guest who joins later can claim their games. Member seats never carry guest fields (a check constraint). |
 | game_win_conditions, game_rules | game_id, win condition or rule id, position |
 | win_conditions, rules | id, name |
 | audit_log | at, actor, entity, entity_id, action, before / after (jsonb) |
@@ -106,4 +110,4 @@ What it does:
 
 The script can be rerun until cutover. Migrated rows have stable IDs, and emails, roles and commanders already linked in the database are kept. Each `--write` replaces the group's data in one transaction, so a failed run changes nothing. The audit log is kept. Once games have been entered through the app, it refuses to run without `--force`. With `--force` those games are kept; if a migrated game now has the same date and number, the app game is renumbered and a warning is printed. Parsing is in `lib/migrate.ts` and the database writes are in `lib/db/import.ts`.
 
-The parser was checked against the real "Magic Records - 2026" sheet (Nov 2026): with the old sheet's own filters, 17 of 19 players match its Player Statistics exactly, and the other two differ only where the old sheet had bad rows (a game with deck-only rows, and a game with no recorded winner). A blank bracket imports as no bracket; it is not carried forward from the previous game (only 21 of the 371 old games record one), so the app's bracket filter lets untagged games through and only drops games tagged with another bracket; with the old sheet's filters this reproduces its totals. A game with no recorded winner imports as unfinished. A deck cell ending in another player's name, like `🟦🟥⬜Tidus (Sam)` in Alex's column, is a borrowed deck: the seat is Alex's, the deck is Sam's Tidus, and no separate deck is created. A deck nickname ending in `(Precon)` is imported without it, with "Precon" in the deck notes. Guests get no deck; the deck text typed for a guest seat is added to that game's notes as `Guest seat N: …`. Commander seeds in `scripts/commander-seeds.json` cover about 135 of 235 decks; the rest show up on `/queue` to link by hand. Always check the dry-run report before running `--write`.
+The parser was checked against the real "Magic Records - 2026" sheet (Nov 2026): with the old sheet's own filters, 17 of 19 players match its Player Statistics exactly, and the other two differ only where the old sheet had bad rows (a game with deck-only rows, and a game with no recorded winner). A blank bracket imports as no bracket; it is not carried forward from the previous game (only 21 of the 371 old games record one), so the app's bracket filter lets untagged games through and only drops games tagged with another bracket; with the old sheet's filters this reproduces its totals. A game with no recorded winner imports as unfinished. A deck cell ending in another player's name, like `🟦🟥⬜Tidus (Sam)` in Alex's column, is a borrowed deck: the seat is Alex's, the deck is Sam's Tidus, and no separate deck is created. A deck nickname ending in `(Precon)` is imported without it, with "Precon" in the deck notes. Guests get no tracked deck; the deck text typed for a guest seat (a `RANDOM` / `RANDOM_SeatN` row, or a row with a deck and no player) goes on that seat: split on the last ` - `, the left part is `guest_deck` and the right part `guest_name` (`Caesar - Zed` → deck "Caesar", name "Zed"); without ` - ` the whole text is the deck and the name stays empty (parentheses are never read as a name). Imported guests have no `guest_added_by`, and nothing is added to the game notes. Commander seeds in `scripts/commander-seeds.json` cover about 135 of 235 decks; the rest show up on `/queue` to link by hand. Always check the dry-run report before running `--write`.

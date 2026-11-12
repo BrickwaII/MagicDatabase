@@ -1,7 +1,8 @@
 // Public, read-only stats links. A group can turn on a share link
 // (/s/<token>) that anyone can open without signing in. The page only ever
 // sees approved games, display names and deck names: no emails, notes,
-// pending or rejected games, or audit information.
+// pending or rejected games, audit information, deck list links, deck
+// version notes, or guests' names, decks and hosts (a guest seat is just "Guest").
 import { randomBytes } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "./db";
@@ -9,7 +10,8 @@ import { withGroup } from "./db/group";
 import { groups } from "./db/schema";
 import { AppError, audit, ctx, listDecks, listGames, listPlayers, listRules } from "./data";
 import { isAdmin } from "./permissions";
-import type { Deck, GameWithSeats, Lookup, Player } from "./schema";
+import type { Deck, GameWithSeats, Lookup, Player, VersionRef } from "./schema";
+import { listDeckVersions } from "./versions";
 import { GUEST_PLAYER_ID } from "./schema";
 
 /** 18 random bytes → 24 base64url characters. */
@@ -101,22 +103,25 @@ export type PublicDeck = Pick<Deck, "deck_id" | "owner_player_id" | "name" | "co
 
 export interface PublicStats {
   group: { name: string };
-  /** Approved games only, newest first, with notes and reviewer fields blanked. */
+  /** Approved games only, newest first, with notes, reviewer and guest fields blanked. */
   games: GameWithSeats[];
   /** Players who sat in at least one of those games. */
   players: PublicPlayer[];
   decks: PublicDeck[];
   rules: Lookup[];
+  /** Deck versions: number and start date only, never notes or list links. */
+  versions: VersionRef[];
 }
 
 /** Everything the public page shows for one group, read inside that group. */
 export async function loadPublicStats(group: { id: string; name: string }): Promise<PublicStats> {
   return withGroup(group.id, async () => {
-    const [games, players, decks, rules] = await Promise.all([
+    const [games, players, decks, rules, versions] = await Promise.all([
       listGames({ status: "approved" }),
       listPlayers({ includeInactive: true }),
       listDecks({ includeInactive: true }),
       listRules(),
+      listDeckVersions(),
     ]);
     const clean: GameWithSeats[] = games
       .filter((g) => g.status === "approved")
@@ -134,7 +139,17 @@ export async function loadPublicStats(group: { id: string; name: string }): Prom
         approved_by: "",
         rev: 0,
         reject_reason: "",
-        seats: g.seats.map((s) => ({ ...s })),
+        // Guests haven't agreed to be listed publicly: no name, deck text or host.
+        seats: g.seats.map((s) => ({
+          game_id: s.game_id,
+          seat: s.seat,
+          player_id: s.player_id,
+          deck_id: s.deck_id,
+          is_winner: s.is_winner,
+          guest_name: "",
+          guest_deck: "",
+          guest_added_by: "",
+        })),
       }));
     const seatedPlayers = new Set(clean.flatMap((g) => g.seats.map((s) => s.player_id)));
     const seatedDecks = new Set(clean.flatMap((g) => g.seats.map((s) => s.deck_id)));
@@ -148,6 +163,9 @@ export async function loadPublicStats(group: { id: string; name: string }): Prom
         .filter((d) => seatedDecks.has(d.deck_id))
         .map((d) => ({ deck_id: d.deck_id, owner_player_id: d.owner_player_id, name: d.name, colors: d.colors })),
       rules,
+      versions: versions
+        .filter((v) => seatedDecks.has(v.deck_id))
+        .map((v) => ({ deck_id: v.deck_id, version_no: v.version_no, started_on: v.started_on })),
     };
   });
 }

@@ -27,7 +27,7 @@ export default async function GamePage({
 
   if (edit && editable) {
     // Keep players/decks that have since been deactivated so old games still edit cleanly.
-    const used = new Set(game.seats.flatMap((s) => [s.player_id, s.deck_id]));
+    const used = new Set(game.seats.flatMap((s) => [s.player_id, s.deck_id, s.guest_added_by]));
     const [players, decks, winConditions, rules] = await Promise.all([
       listPlayers({ includeInactive: true }).then((ps) => ps.filter((p) => p.active || used.has(p.player_id))),
       listDecks({ includeInactive: true }).then((ds) => ds.filter((d) => d.active || used.has(d.deck_id))),
@@ -71,7 +71,7 @@ export default async function GamePage({
           </a>
         )}
       </div>
-      <GameCard game={game} names={names} />
+      <GameCard game={game} names={names} detail />
       <p className="small muted">
         Logged by {names.players.get(game.submitted_by)?.display_name ?? game.submitted_by}
         {game.approved_by && <>, approved by {names.players.get(game.approved_by)?.display_name ?? game.approved_by}</>}.

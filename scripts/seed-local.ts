@@ -34,6 +34,7 @@ async function main() {
     notes: "",
     commander_status: "unresolved" as const,
     active: true,
+    list_url: "",
   }));
   const wcs = [
     ["combat", "Combat"],
@@ -77,7 +78,16 @@ async function main() {
         reject_reason: "",
       });
       pod.forEach(([player_id, deck_id], i) =>
-        seats.push({ game_id: id, seat: i + 1, player_id, deck_id, is_winner: !(day === 5 && n === 2) && i === winner }),
+        seats.push({
+          game_id: id,
+          seat: i + 1,
+          player_id,
+          deck_id,
+          is_winner: !(day === 5 && n === 2) && i === winner,
+          guest_name: "",
+          guest_deck: "",
+          guest_added_by: "",
+        }),
       );
     }
   }
@@ -97,6 +107,7 @@ async function main() {
           card_name: "",
           typed_name: d.name,
         })),
+        deckVersions: [],
         winConditions: wcs,
         rules,
         games,

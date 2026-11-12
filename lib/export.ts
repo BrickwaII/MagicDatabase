@@ -15,9 +15,10 @@ import {
   listWinConditions,
 } from "./data";
 import { isAdmin } from "./permissions";
+import { listDeckVersions } from "./versions";
 import { GUEST_PLAYER_ID, type GameWithSeats, type Player } from "./schema";
 
-export const CSV_EXPORTS = ["games-flat", "players", "decks"] as const;
+export const CSV_EXPORTS = ["games-flat", "players", "decks", "deck-versions"] as const;
 export type CsvExport = (typeof CSV_EXPORTS)[number];
 
 function requireExportAdmin(actor: Player) {
@@ -25,15 +26,16 @@ function requireExportAdmin(actor: Player) {
 }
 
 async function load() {
-  const [players, decks, commanders, winConditions, rules, games] = await Promise.all([
+  const [players, decks, commanders, winConditions, rules, games, versions] = await Promise.all([
     listPlayers({ includeInactive: true }),
     listDecks({ includeInactive: true }),
     listDeckCommanders(),
     listWinConditions(),
     listRules(),
     listGames(),
+    listDeckVersions(),
   ]);
-  return { players, decks, commanders, winConditions, rules, games };
+  return { players, decks, commanders, winConditions, rules, games, versions };
 }
 
 /** The whole group as plain JSON (everything except the share token itself). */
@@ -60,6 +62,7 @@ export async function exportGroupJson(actor: Player) {
     },
     players: data.players,
     decks: data.decks.map((d) => ({ ...d, commanders: byDeck.get(d.deck_id) ?? [] })),
+    deck_versions: data.versions,
     win_conditions: data.winConditions,
     rules: data.rules,
     games: [...data.games].reverse(),
@@ -94,7 +97,24 @@ export async function exportCsv(entity: CsvExport, actor: Player): Promise<strin
 
   if (entity === "games-flat") {
     rows = [
-      ["Date", "Game #", "Seat", "Player", "Deck", "Winner", "Result", "Status", "Brackets", "Win conditions", "Rules", "Notes", "Game ID"],
+      [
+        "Date",
+        "Game #",
+        "Seat",
+        "Player",
+        "Deck",
+        "Winner",
+        "Result",
+        "Status",
+        "Brackets",
+        "Win conditions",
+        "Rules",
+        "Notes",
+        "Game ID",
+        "Guest name",
+        "Guest deck",
+        "Guest added by",
+      ],
     ];
     const games = [...data.games].sort((a, b) => a.date.localeCompare(b.date) || a.day_game_no - b.day_game_no);
     for (const g of games) {
@@ -115,14 +135,33 @@ export async function exportCsv(entity: CsvExport, actor: Player): Promise<strin
           g.additional_rules.map((r) => ruleName.get(r) ?? r).join(", "),
           g.notes,
           g.game_id,
+          s.guest_name,
+          s.guest_deck,
+          s.guest_added_by ? playerName(s.guest_added_by) : "",
         ]);
       }
+    }
+  } else if (entity === "deck-versions") {
+    rows = [["Deck ID", "Owner", "Deck", "Version", "Started on", "Note", "List URL", "Logged by", "Logged at"]];
+    for (const v of data.versions) {
+      const d = deckById.get(v.deck_id);
+      rows.push([
+        v.deck_id,
+        d ? playerName(d.owner_player_id) : "",
+        d?.name ?? "",
+        v.version_no,
+        v.started_on,
+        v.note,
+        v.list_url,
+        playerName(v.created_by),
+        v.created_at,
+      ]);
     }
   } else if (entity === "players") {
     rows = [["Player ID", "Name", "Email", "Role", "Active"]];
     for (const p of data.players) rows.push([p.player_id, p.display_name, p.email, p.role, p.active ? "Yes" : "No"]);
   } else {
-    rows = [["Deck ID", "Owner ID", "Owner", "Name", "Colors", "Bracket", "Commanders", "Companion", "Commander status", "Active", "Notes"]];
+    rows = [["Deck ID", "Owner ID", "Owner", "Name", "Colors", "Bracket", "Commanders", "Companion", "Commander status", "Active", "Notes", "List URL", "Current version"]];
     for (const d of data.decks) {
       const cmds = data.commanders.filter((c) => c.deck_id === d.deck_id);
       const label = (c: (typeof cmds)[number]) => c.card_name || c.typed_name;
@@ -138,6 +177,8 @@ export async function exportCsv(entity: CsvExport, actor: Player): Promise<strin
         d.commander_status,
         d.active ? "Yes" : "No",
         d.notes,
+        d.list_url,
+        1 + data.versions.filter((v) => v.deck_id === d.deck_id).length,
       ]);
     }
   }

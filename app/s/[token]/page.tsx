@@ -42,6 +42,7 @@ export default async function PublicStatsPage({
         players={data.players}
         rules={data.rules}
         names={names}
+        versions={data.versions}
         publicView
         heading={
           <div className="spread">

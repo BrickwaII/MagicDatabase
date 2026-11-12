@@ -3,7 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDeck, createGame, listAudit, rejectGame, type GameInput } from "@/lib/data";
 import type { Db } from "@/lib/db";
 import { withGroup } from "@/lib/db/group";
-import { groups } from "@/lib/db/schema";
+import { decks as decksTable, groups } from "@/lib/db/schema";
 import { parseCsv } from "@/lib/csv";
 import { CSV_EXPORTS, exportCsv, exportGroupJson } from "@/lib/export";
 import type { Player } from "@/lib/schema";
@@ -98,7 +98,15 @@ describe("share settings", () => {
 
 describe("public stats", () => {
   it("is scoped to the token's group and only shows approved games without emails or notes", async () => {
-    const approved = await createGame(game("henry", { notes: "private approved note" }), henry);
+    const base = game("henry");
+    const approved = await createGame(
+      game("henry", {
+        notes: "private approved note",
+        seats: [...base.seats, { player_id: "RANDOM", guest_name: "Quinn", guest_deck: "Kite Tribal", guest_added_by: "kim" }],
+      }),
+      henry,
+    );
+    await db.update(decksTable).set({ listUrl: "https://lists.example.test/private-list" }).where(eq(decksTable.id, decks.henry));
     await createGame(game("sam", { notes: "pending note" }), sam);
     const rejected = await createGame(game("alex", { notes: "rejected note" }), sam);
     await rejectGame(rejected.game_id, henry, "wrong pod");
@@ -131,6 +139,18 @@ describe("public stats", () => {
     expect(json).not.toContain("@");
     expect(json).not.toMatch(/secret deck note|private approved note|pending note|rejected note|wrong pod|Other Sam/);
     expect(json).not.toContain('"role"');
+    // A guest seat is just "Guest": no name, deck text, host or deck list links.
+    expect(data.games[0].seats[3]).toEqual({
+      game_id: approved.game_id,
+      seat: 4,
+      player_id: "RANDOM",
+      deck_id: "",
+      is_winner: false,
+      guest_name: "",
+      guest_deck: "",
+      guest_added_by: "",
+    });
+    expect(json).not.toMatch(/Quinn|Kite Tribal|kim|Kim|private-list/);
 
     const theirs = (await getPublicStatsByToken(otherToken))!;
     expect(theirs.group.name).toBe("Other");
@@ -167,6 +187,26 @@ describe("export", () => {
     expect(JSON.stringify(out)).not.toContain((await db.select().from(groups).where(eq(groups.id, home)))[0].shareToken!);
   });
 
+  it("exports guest seats and deck list links, guarding against spreadsheet formulas", async () => {
+    const base = game("henry");
+    await createGame(
+      { ...base, seats: [...base.seats, { player_id: "RANDOM", guest_name: "=Quinn", guest_deck: "+Kite Tribal", guest_added_by: "kim" }] },
+      henry,
+    );
+    await db.update(decksTable).set({ listUrl: "https://lists.example.test/h" }).where(eq(decksTable.id, decks.henry));
+    const rows = parseCsv((await exportCsv("games-flat", henry)).trimEnd());
+    const guestRow = rows.find((r) => r[3] === "Guest")!;
+    expect(guestRow.slice(12 + 1)).toEqual(["'=Quinn", "'+Kite Tribal", "Kim"]);
+    expect(rows.find((r) => r[3] === "Sam")!.slice(13)).toEqual(["", "", ""]);
+    const deckRows = parseCsv((await exportCsv("decks", henry)).trimEnd());
+    const urlCol = deckRows[0].indexOf("List URL");
+    expect(urlCol).toBeGreaterThan(0);
+    expect(deckRows.find((r) => r[0] === decks.henry)![urlCol]).toBe("https://lists.example.test/h");
+    const json = await exportGroupJson(henry);
+    expect(json.games[0].seats[3]).toMatchObject({ guest_name: "=Quinn", guest_deck: "+Kite Tribal", guest_added_by: "kim" });
+    expect(json.decks.find((d) => d.deck_id === decks.henry)!.list_url).toBe("https://lists.example.test/h");
+  });
+
   it("writes a games CSV with one row per seat", async () => {
     await createGame(game("sam", { notes: 'tricky, "quoted"\nnote', brackets: ["3"] }), henry);
     const rows = parseCsv((await exportCsv("games-flat", henry)).trimEnd());
@@ -176,6 +216,7 @@ describe("export", () => {
     expect(rows).toHaveLength(4);
     expect(rows[2].slice(0, 9)).toEqual(["2026-04-01", "1", "2", "Sam", "Sam deck", "Yes", "Won", "approved", "3"]);
     expect(rows[1][11]).toBe('tricky, "quoted"\nnote');
+    expect(rows[0].slice(12)).toEqual(["Game ID", "Guest name", "Guest deck", "Guest added by"]);
 
     const players = parseCsv((await exportCsv("players", henry)).trimEnd());
     expect(players).toContainEqual(["kim", "Kim", "kim@example.com", "player", "Yes"]);

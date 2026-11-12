@@ -1,11 +1,16 @@
 import Link from "next/link";
 import { GameCard } from "@/components/GameCard";
 import { requirePlayer } from "@/lib/auth";
-import { listGames, listPlayers } from "@/lib/data";
+import { listGamesPage, listPlayers } from "@/lib/data";
 import { loadNames } from "@/lib/names";
 import type { GameStatus } from "@/lib/schema";
 
-type SP = { from?: string; to?: string; date?: string; player?: string; status?: string };
+type SP = { from?: string; to?: string; date?: string; player?: string; status?: string; shown?: string };
+
+/** Games per "Show more". */
+const PAGE = 20;
+/** Upper bound on ?shown= so a hand-edited URL can't load everything at once. */
+const MAX_SHOWN = 5000;
 
 export default async function Games({ searchParams }: { searchParams: Promise<SP> }) {
   await requirePlayer();
@@ -15,12 +20,19 @@ export default async function Games({ searchParams }: { searchParams: Promise<SP
   const status = (["pending", "approved", "rejected"] as const).includes(sp.status as GameStatus)
     ? (sp.status as GameStatus)
     : undefined;
-  const [games, players, names] = await Promise.all([
-    listGames({ from, to, playerId: sp.player || undefined, status }),
+  // How many to show: ?shown=N, rounded up to whole pages of 20.
+  const asked = Number.parseInt(sp.shown ?? "", 10);
+  const limit = Math.min(MAX_SHOWN, Math.max(PAGE, Number.isFinite(asked) ? Math.ceil(asked / PAGE) * PAGE : PAGE));
+  const [{ games: shown, total, nextId }, players, names] = await Promise.all([
+    listGamesPage({ from, to, playerId: sp.player || undefined, status }, limit),
     listPlayers(),
     loadNames(),
   ]);
-  const shown = games.slice(0, 200);
+  // "Show more" keeps the filters and scrolls to the first newly shown game.
+  const more = new URLSearchParams();
+  for (const k of ["from", "to", "date", "player", "status"] as const) if (sp[k]) more.set(k, sp[k]!);
+  more.set("shown", String(limit + PAGE));
+  const moreHref = `/games?${more}${nextId ? `#${encodeURIComponent(nextId)}` : ""}`;
   const filtered = !!(sp.from || sp.to || sp.date || sp.player || sp.status);
   const activeCount = [sp.from || sp.date, sp.to, sp.player, sp.status].filter(Boolean).length;
   return (
@@ -32,7 +44,7 @@ export default async function Games({ searchParams }: { searchParams: Promise<SP
         <summary>
           Filter
           <span className="summary-hint">
-            {games.length} game{games.length === 1 ? "" : "s"}
+            {total} game{total === 1 ? "" : "s"}
             {activeCount > 0 && `, ${activeCount} filter${activeCount === 1 ? "" : "s"} on`}
           </span>
         </summary>
@@ -77,7 +89,6 @@ export default async function Games({ searchParams }: { searchParams: Promise<SP
           </div>
         </form>
       </details>
-      {games.length > shown.length && <p className="muted small">Showing the latest {shown.length} of {games.length}.</p>}
       {shown.length === 0 ? (
         <div className="empty">
           <strong>{filtered ? "No games match these filters" : "No games yet"}</strong>
@@ -95,11 +106,23 @@ export default async function Games({ searchParams }: { searchParams: Promise<SP
           </div>
         </div>
       ) : (
-        <div className="game-grid">
-          {shown.map((g) => (
-            <GameCard key={g.game_id} game={g} names={names} />
-          ))}
-        </div>
+        <>
+          <div className="game-grid">
+            {shown.map((g) => (
+              <GameCard key={g.game_id} game={g} names={names} />
+            ))}
+          </div>
+          <div className="show-more">
+            <p className="muted small" aria-live="polite">
+              Showing {shown.length} of {total} game{total === 1 ? "" : "s"}
+            </p>
+            {shown.length < total && (
+              <Link className="btn" href={moreHref}>
+                Show {Math.min(PAGE, total - shown.length)} more
+              </Link>
+            )}
+          </div>
+        </>
       )}
     </div>
   );

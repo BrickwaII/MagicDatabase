@@ -491,3 +491,46 @@ td.strong { font-weight: 700; }
   .who .link { font-size: 0.8rem; }
 }
 @media (max-width: 340px) { .wordmark { display: none; } }
+
+/* ---------- Guests ---------- */
+.guest-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 10px; margin-top: 10px; }
+.guest-fields input, .guest-fields select { width: 100%; }
+.guest-fields .lbl { margin-bottom: 4px; }
+.guest-host { grid-column: 1 / -1; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
+.guest-host .lbl { margin: 0; }
+.guest-hint { grid-column: 1 / -1; }
+.untracked { font-style: italic; color: var(--muted); }
+.seat-guest-name { font-weight: 500; color: var(--muted); }
+.list-link { font-size: 0.85rem; font-weight: 600; white-space: nowrap; }
+.seat-extra { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: -4px; font-size: 0.8rem; color: var(--muted); }
+.seat.win .seat-extra { color: var(--win-text); }
+.seat.win .seat-guest-name, .seat.win .untracked { color: var(--win-text); }
+
+/* ---------- Games list ---------- */
+.game { scroll-margin-top: 76px; }
+.show-more { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 4px 0 8px; }
+.show-more p { margin: 0; }
+.record-expected { display: block; margin: 2px 0 4px; }
+.record-diff { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 999px; font-size: 0.8rem; font-weight: 650; background: color-mix(in srgb, var(--felt-text) 14%, transparent); }
+.record-sub a { display: inline-block; }
+
+/* ---------- Deck versions ---------- */
+.version-tag { font-size: 0.8rem; font-weight: 650; }
+a.deck-name { color: var(--text); }
+a.deck-name:hover { text-decoration: none; }
+a.deck-name:hover span:last-child { text-decoration: underline; }
+.deck-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.version-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.version { display: grid; gap: 6px; padding: 14px 16px; }
+.version-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.version-head .badge { margin-left: auto; }
+.version-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.version-diff { font-weight: 650; color: var(--text); }
+.version-edit > summary { cursor: pointer; color: var(--accent); font-weight: 600; min-height: var(--tap); display: flex; align-items: center; }
+.version-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.version-form input, .version-form textarea { width: 100%; }
+@media (min-width: 640px) {
+  .version-form { grid-template-columns: 200px minmax(0, 1fr); }
+  .version-note { grid-column: 1 / -1; }
+}
+.seat-player.guest { white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }

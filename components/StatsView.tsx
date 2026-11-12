@@ -4,8 +4,17 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Pips } from "@/components/Pips";
-import { BRACKETS, GUEST_PLAYER_ID, POD_SIZES, type GameWithSeats, type Lookup } from "@/lib/schema";
-import { deckStats, playerSeatStats, playerStats, seatStats, summary, type SeatTable, type StatsFilter } from "@/lib/stats";
+import { BRACKETS, GUEST_PLAYER_ID, POD_SIZES, type GameWithSeats, type Lookup, type VersionRef } from "@/lib/schema";
+import {
+  deckStats,
+  playerSeatStats,
+  playerStats,
+  seatStats,
+  summary,
+  versionsByDeck,
+  type SeatTable,
+  type StatsFilter,
+} from "@/lib/stats";
 
 export type SP = Record<string, string | string[] | undefined>;
 const list = (v: string | string[] | undefined) => (v === undefined ? [] : [v].flat());
@@ -28,6 +37,8 @@ export interface StatsViewProps {
   heading?: ReactNode;
   /** Public view: don't mention pending games. */
   publicView?: boolean;
+  /** Deck versions, for the Decks view's "Split by version" option (number and date only). */
+  versions?: VersionRef[];
 }
 
 function SeatTables({ tables, perPlayer }: { tables: SeatTable[]; perPlayer?: boolean }) {
@@ -80,7 +91,17 @@ function SeatTables({ tables, perPlayer }: { tables: SeatTable[]; perPlayer?: bo
   );
 }
 
-export function StatsView({ sp, basePath, games, players, rules, names, heading = <h1>Stats</h1>, publicView }: StatsViewProps) {
+export function StatsView({
+  sp,
+  basePath,
+  games,
+  players,
+  rules,
+  names,
+  heading = <h1>Stats</h1>,
+  publicView,
+  versions = [],
+}: StatsViewProps) {
   const view = sp.view === "decks" || sp.view === "seats" ? sp.view : "players";
   const submitted = sp.f === "1";
   const filter: Required<StatsFilter> = {
@@ -90,6 +111,8 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
     ignoredPlayers: submitted ? list(sp.noplayer) : [GUEST_PLAYER_ID],
   };
   const seatPlayer = typeof sp.player === "string" ? sp.player : "";
+  const byVersion = sp.byver === "1";
+  const deckVersions = versionsByDeck(versions);
   const sum = summary(games, filter);
   const name = (id: string) => (id === GUEST_PLAYER_ID ? "Guest" : (names.players.get(id)?.display_name ?? id));
 
@@ -164,6 +187,12 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
               ))}
             </div>
           </div>
+          <div>
+            <span className="lbl">Decks</span>
+            <label className="chip">
+              <input type="checkbox" name="byver" value="1" defaultChecked={byVersion} /> Split by version
+            </label>
+          </div>
           <div className="row">
             <button className="primary" type="submit">
               Apply filters
@@ -189,6 +218,7 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
       </p>
 
       {view === "players" && (
+        <>
         <div className="card table-card">
           <div className="table-wrap sticky-col">
           <table>
@@ -198,6 +228,9 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
                 <th className="num">Games</th>
                 <th className="num">Wins</th>
                 <th className="num">Win %</th>
+                <th className="num" title="What pod sizes alone predict: the average of 1 ÷ players over the same games">
+                  Expected
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -209,12 +242,18 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
                   <td className="num">{s.games}</td>
                   <td className="num">{s.wins}</td>
                   <td className="num win-pct">{pct(s.winRate)}</td>
+                  <td className="num muted">{pct(s.expected)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           </div>
         </div>
+        <p className="small muted">
+          Expected is what pod sizes alone predict: 1 in 4 for a 4-player game, 1 in 3 for a 3-player game, averaged over each
+          player&apos;s counted games.
+        </p>
+        </>
       )}
 
       {view === "decks" && (
@@ -231,13 +270,21 @@ export function StatsView({ sp, basePath, games, players, rules, names, heading 
               </tr>
             </thead>
             <tbody>
-              {deckStats(games, filter).map((s) => {
+              {deckStats(games, filter, byVersion ? versions : undefined).map((s) => {
                 const d = names.decks.get(s.deck_id);
+                const changes = deckVersions.get(s.deck_id) ?? [];
+                const since = changes.find((v) => v.version_no === s.version_no)?.started_on;
                 return (
-                  <tr key={`${s.player_id}|${s.deck_id}`}>
+                  <tr key={`${s.player_id}|${s.deck_id}|${s.version_no ?? ""}`}>
                     <td>
                       <span className="cell-deck">
                         {d && <Pips colors={d.colors} />} <strong>{d?.name ?? s.deck_id}</strong>
+                        {s.version_no !== undefined && changes.length > 0 && (
+                          <span className="version-tag" title={since ? `Since ${since}` : "Before the first logged change"}>
+                            v{s.version_no}
+                            {since && <span className="muted"> from {since}</span>}
+                          </span>
+                        )}
                       </span>
                       <span className="cell-sub">
                         {name(s.player_id)}

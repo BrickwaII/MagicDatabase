@@ -3,7 +3,7 @@ import { download, exportActor, stamp } from "@/lib/export-http";
 
 export const dynamic = "force-dynamic";
 
-/** /admin/export/games-flat.csv, /admin/export/players.csv, /admin/export/decks.csv. Admins only. */
+/** /admin/export/games-flat.csv, /admin/export/players.csv, /admin/export/decks.csv, /admin/export/deck-versions.csv. Admins only. */
 export async function GET(_req: Request, { params }: { params: Promise<{ file: string }> }) {
   const { file } = await params;
   const entity = file.replace(/\.csv$/, "") as CsvExport;

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { saveDeck } from "@/app/actions";
-import { BRACKETS, COLOR_ORDER, type DeckCommander, type PlayerOption } from "@/lib/schema";
+import { BRACKETS, COLOR_ORDER, LIST_URL_MAX, type DeckCommander, type PlayerOption } from "@/lib/schema";
 import {
   byOracleId,
   canPair,
@@ -178,6 +178,7 @@ interface Props {
     bracket: string;
     notes: string;
     active: boolean;
+    list_url: string;
     commanders: DeckCommander[];
   };
 }
@@ -190,6 +191,7 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
   const [name, setName] = useState(initial?.name ?? "");
   const [bracket, setBracket] = useState(initial?.bracket ?? "");
   const [notes, setNotes] = useState(initial?.notes ?? "");
+  const [listUrl, setListUrl] = useState(initial?.list_url ?? "");
   const [active, setActive] = useState(initial?.active ?? true);
   const [manualColors, setManualColors] = useState(initial?.colors ?? "");
   const cmds = initial?.commanders ?? [];
@@ -250,10 +252,10 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
       const res = await saveDeck({
         id: deckId,
         active,
-        input: { owner_player_id: owner, name, colors, bracket: bracket as never, notes, commanders },
+        input: { owner_player_id: owner, name, colors, bracket: bracket as never, notes, commanders, list_url: listUrl },
       });
       if (res.ok) {
-        router.push("/decks");
+        router.push(`/decks/${res.id}`);
         router.refresh();
       } else setError(res.error);
     });
@@ -355,6 +357,20 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
           </div>
         )}
       </fieldset>
+
+      <label className="card">
+        <span className="lbl">Deck list link (optional)</span>
+        <input
+          type="url"
+          inputMode="url"
+          value={listUrl}
+          onChange={(e) => setListUrl(e.target.value)}
+          maxLength={LIST_URL_MAX}
+          placeholder="https://moxfield.com/decks/… or Archidekt, any site"
+          autoComplete="off"
+          style={{ width: "100%" }}
+        />
+      </label>
 
       <label className="card">
         <span className="lbl">Notes</span>

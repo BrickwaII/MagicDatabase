@@ -8,12 +8,14 @@
 import { asc, eq } from "drizzle-orm";
 import { commanderValues, deckValues, gameValues, seatValues } from "../data";
 import type { MigrationResult } from "../migrate";
-import type { Deck, DeckCommander, Game, GameSeat, Lookup, Player } from "../schema";
+import type { Deck, DeckCommander, DeckVersion, Game, GameSeat, Lookup, Player } from "../schema";
+import { versionValues } from "../versions";
 import type { Db, Tx } from "./index";
 import {
   auditLog,
   deckCommanders,
   decks,
+  deckVersions,
   gameRules,
   games,
   gameSeats,
@@ -29,6 +31,8 @@ export interface GroupData {
   players: Player[];
   decks: Deck[];
   deckCommanders: DeckCommander[];
+  /** Changes logged in the app; the old sheet has none (its decks are all v1). */
+  deckVersions: DeckVersion[];
   games: Game[];
   seats: GameSeat[];
   winConditions: Lookup[];
@@ -39,7 +43,7 @@ export const isMigratedGameId = (id: string) => id.startsWith("m_");
 
 /** Everything stored for a group, in app shapes. */
 export async function readGroupData(db: Conn, gid: string): Promise<GroupData> {
-  const [p, d, c, g, s, wc, r, gwc, gr] = await Promise.all([
+  const [p, d, c, g, s, wc, r, gwc, gr, dv] = await Promise.all([
     db.select().from(players).where(eq(players.groupId, gid)),
     db.select().from(decks).where(eq(decks.groupId, gid)),
     db.select().from(deckCommanders).where(eq(deckCommanders.groupId, gid)).orderBy(asc(deckCommanders.slot)),
@@ -49,6 +53,7 @@ export async function readGroupData(db: Conn, gid: string): Promise<GroupData> {
     db.select().from(rules).where(eq(rules.groupId, gid)).orderBy(asc(rules.seq)),
     db.select().from(gameWinConditions).where(eq(gameWinConditions.groupId, gid)).orderBy(asc(gameWinConditions.position)),
     db.select().from(gameRules).where(eq(gameRules.groupId, gid)).orderBy(asc(gameRules.position)),
+    db.select().from(deckVersions).where(eq(deckVersions.groupId, gid)).orderBy(asc(deckVersions.deckId), asc(deckVersions.versionNo)),
   ]);
   return {
     players: p.map((x) => ({ player_id: x.id, display_name: x.displayName, email: x.email ?? "", role: x.role, active: x.active })),
@@ -61,6 +66,7 @@ export async function readGroupData(db: Conn, gid: string): Promise<GroupData> {
       notes: x.notes,
       commander_status: x.commanderStatus,
       active: x.active,
+      list_url: x.listUrl ?? "",
     })),
     deckCommanders: c.map((x) => ({
       deck_id: x.deckId,
@@ -91,6 +97,19 @@ export async function readGroupData(db: Conn, gid: string): Promise<GroupData> {
       player_id: x.playerId ?? "RANDOM",
       deck_id: x.deckId ?? "",
       is_winner: x.isWinner,
+      guest_name: x.guestName ?? "",
+      guest_deck: x.guestDeck ?? "",
+      guest_added_by: x.guestAddedBy ?? "",
+    })),
+    deckVersions: dv.map((x) => ({
+      id: x.id,
+      deck_id: x.deckId,
+      version_no: x.versionNo,
+      started_on: x.startedOn,
+      note: x.note,
+      list_url: x.listUrl ?? "",
+      created_by: x.createdBy,
+      created_at: x.createdAt.toISOString(),
     })),
     winConditions: wc.map((x) => ({ id: x.id, name: x.name })),
     rules: r.map((x) => ({ id: x.id, name: x.name })),
@@ -111,6 +130,7 @@ export async function replaceGroupData(tx: Conn, gid: string, data: GroupData) {
   await tx.delete(gameRules).where(eq(gameRules.groupId, gid));
   await tx.delete(gameSeats).where(eq(gameSeats.groupId, gid));
   await tx.delete(games).where(eq(games.groupId, gid));
+  await tx.delete(deckVersions).where(eq(deckVersions.groupId, gid));
   await tx.delete(deckCommanders).where(eq(deckCommanders.groupId, gid));
   await tx.delete(decks).where(eq(decks.groupId, gid));
   await tx.delete(players).where(eq(players.groupId, gid));
@@ -133,6 +153,7 @@ export async function replaceGroupData(tx: Conn, gid: string, data: GroupData) {
   await insertChunked(data.rules, (c) => tx.insert(rules).values(c.map((l) => ({ groupId: gid, ...l }))));
   await insertChunked(data.decks, (c) => tx.insert(decks).values(c.map((d) => deckValues(gid, d))));
   await insertChunked(data.deckCommanders, (c) => tx.insert(deckCommanders).values(c.map((x) => commanderValues(gid, x))));
+  await insertChunked(data.deckVersions, (c) => tx.insert(deckVersions).values(c.map((x) => versionValues(gid, x))));
   await insertChunked(data.games, (c) => tx.insert(games).values(c.map((g) => gameValues(gid, g))));
   await insertChunked(data.seats, (c) => tx.insert(gameSeats).values(c.map((s) => seatValues(gid, s))));
   const wcLinks = data.games.flatMap((g) =>
@@ -165,7 +186,14 @@ export function mergeImport(res: MigrationResult, current: GroupData, opts: { fo
   const decks = res.decks.map((d) => {
     const c = current.decks.find((x) => x.deck_id === d.deck_id);
     return c
-      ? { ...d, commander_status: c.commander_status, bracket: c.bracket || d.bracket, notes: c.notes || d.notes, active: c.active }
+      ? {
+          ...d,
+          commander_status: c.commander_status,
+          bracket: c.bracket || d.bracket,
+          notes: c.notes || d.notes,
+          active: c.active,
+          list_url: c.list_url || d.list_url,
+        }
       : { ...d };
   });
   decks.push(...current.decks.filter((c) => !decks.some((d) => d.deck_id === c.deck_id)));
@@ -199,6 +227,8 @@ export function mergeImport(res: MigrationResult, current: GroupData, opts: { fo
     players,
     decks,
     deckCommanders,
+    // Versions logged in the app are kept for every deck that still exists.
+    deckVersions: current.deckVersions.filter((v) => decks.some((d) => d.deck_id === v.deck_id)),
     winConditions: mergeLookups(res.winConditions, current.winConditions),
     rules: mergeLookups(res.rules, current.rules),
     games: [...res.games, ...keptGames],

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { DeckListLink } from "@/components/GameCard";
 import { Pips } from "@/components/Pips";
 import { requirePlayer } from "@/lib/auth";
 import { listDeckCommanders, listDecks, listGames, listPlayers } from "@/lib/data";
@@ -69,11 +70,11 @@ export default async function Decks({ searchParams }: { searchParams: Promise<{ 
             const cmd = (cmdsByDeck.get(d.deck_id) ?? []).join(" + ");
             return (
               <li key={d.deck_id} className={`card deck${d.active ? "" : " retired"}`}>
-                <div className="deck-name">
+                <Link className="deck-name" href={`/decks/${d.deck_id}`}>
                   <Pips colors={d.colors} /> <span>{d.name}</span>
-                </div>
+                </Link>
                 {canEditDeck(me, d) && (
-                  <Link className="btn deck-edit" href={`/decks/${d.deck_id}`} aria-label={`Edit ${d.name}`}>
+                  <Link className="btn deck-edit" href={`/decks/${d.deck_id}?edit=1`} aria-label={`Edit ${d.name}`}>
                     Edit
                   </Link>
                 )}
@@ -96,6 +97,7 @@ export default async function Decks({ searchParams }: { searchParams: Promise<{ 
                   </span>
                   {d.bracket && <span>Bracket {d.bracket}</span>}
                   {!d.active && <span>Retired</span>}
+                  {d.list_url && <DeckListLink url={d.list_url} />}
                 </div>
               </li>
             );

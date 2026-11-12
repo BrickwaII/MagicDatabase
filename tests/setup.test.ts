@@ -6,6 +6,7 @@ import { DEFAULT_GROUP_NAME, forgetDefaultGroup } from "@/lib/db/group";
 import { importMigration, AppGamesExistError } from "@/lib/db/import";
 import { groups, players } from "@/lib/db/schema";
 import { runSetup } from "@/lib/db/setup";
+import { createDeckVersion, listDeckVersions } from "@/lib/versions";
 import { parseCsv } from "@/lib/csv";
 import { migrate } from "@/lib/migrate";
 import { useTestDb } from "./helpers/db";
@@ -67,7 +68,7 @@ describe("importing the old sheet", () => {
 1/3/2026,1,1,Henry,🟥🟩⬜Tifa,TRUE,Combat,Planeschase
 ,,2,Sam,⬜🟦Tidus,FALSE,,
 ,,3,Alex,🟦🟩Kilo,FALSE,,
-,,4,RANDOM,,FALSE,,
+,,4,RANDOM,Kite Tribal - Quinn,FALSE,,
 `),
   };
 
@@ -79,7 +80,8 @@ describe("importing the old sheet", () => {
     const games = await listGames();
     expect(games.map((g) => g.game_id)).toEqual(["m_2026-01-03_01"]);
     expect(games[0]).toMatchObject({ additional_rules: ["planechase"], win_conditions: ["combat"] });
-    expect(games[0].seats[3]).toMatchObject({ player_id: "RANDOM", deck_id: "" });
+    expect(games[0].seats[3]).toMatchObject({ player_id: "RANDOM", deck_id: "", guest_deck: "Kite Tribal", guest_name: "Quinn", guest_added_by: "" });
+    expect(games[0].notes).toBe("");
     // The admin's email and role survive the import.
     const [henry] = await db.select().from(players).where(eq(players.id, "henry"));
     expect(henry).toMatchObject({ email: "henry@x.test", role: "admin" });
@@ -89,13 +91,24 @@ describe("importing the old sheet", () => {
       {
         date: "2026-01-03",
         result: "won",
-        seats: games[0].seats.map((s) => ({ player_id: s.player_id, deck_id: s.deck_id, is_winner: s.seat === 2 })),
+        seats: games[0].seats.map((s) => ({
+          player_id: s.player_id,
+          deck_id: s.deck_id,
+          is_winner: s.seat === 2,
+          guest_name: s.guest_name,
+          guest_added_by: s.player_id === "RANDOM" ? "henry" : "",
+        })),
       },
       henryP,
     );
     expect(appGame.day_game_no).toBe(2);
+    const change = await createDeckVersion(games[0].seats[0].deck_id, { started_on: "2026-01-04", note: "Swapped the mana base" }, henryP);
     await expect(importMigration(db, group.id, migrate(old))).rejects.toBeInstanceOf(AppGamesExistError);
     await importMigration(db, group.id, migrate(old), { force: true });
     expect((await listGames()).map((g) => g.game_id).sort()).toEqual([appGame.game_id, "m_2026-01-03_01"].sort());
+    // Deck changes logged in the app survive the re-import.
+    expect((await listDeckVersions()).map((v) => v.id)).toEqual([change.id]);
+    // The kept app game's guest seat survives the re-import.
+    expect((await listGames()).find((g) => g.game_id === appGame.game_id)!.seats[3]).toMatchObject({ guest_name: "Quinn", guest_added_by: "henry" });
   });
 });

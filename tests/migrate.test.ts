@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { parseCsv } from "@/lib/csv";
-import { detectGamesColumns, migrate, parseDate, splitDeckCell } from "@/lib/migrate";
+import { detectGamesColumns, migrate, parseDate, parseGuestDeck, splitDeckCell } from "@/lib/migrate";
 
 describe("deck cells", () => {
   it("splits emoji color identity from the nickname", () => {
     expect(splitDeckCell("🟥🟩⬜Tifa")).toEqual({ colors: "WRG", name: "Tifa" });
     expect(splitDeckCell("🟦⬛ Kilo")).toEqual({ colors: "UB", name: "Kilo" });
     expect(splitDeckCell("Rainbow Dash")).toEqual({ colors: "", name: "Rainbow Dash" });
+  });
+  it("splits a guest's deck text on the last \" - \" into deck and name", () => {
+    expect(parseGuestDeck("Caesar - Zed")).toEqual({ guest_deck: "Caesar", guest_name: "Zed" });
+    expect(parseGuestDeck("  The Jolly Kite Man - Quinn ")).toEqual({ guest_deck: "The Jolly Kite Man", guest_name: "Quinn" });
+    expect(parseGuestDeck("Mono-Red - Big - Zed")).toEqual({ guest_deck: "Mono-Red - Big", guest_name: "Zed" });
+    // No " - ": all deck. Parentheses are never read as a name; hyphens without spaces don't split.
+    expect(parseGuestDeck("Green Goblin (Pickled, lol)")).toEqual({ guest_deck: "Green Goblin (Pickled, lol)", guest_name: "" });
+    expect(parseGuestDeck("Niv-Mizzet (Life)")).toEqual({ guest_deck: "Niv-Mizzet (Life)", guest_name: "" });
+    expect(parseGuestDeck("")).toEqual({ guest_deck: "", guest_name: "" });
   });
   it("parses dates", () => {
     expect(parseDate("1/3/2026")).toBe("2026-01-03");
@@ -203,15 +212,20 @@ Bo,🟥Sparkk,4,,,Bo,🟥Spark
     expect(sticky.games.every((g) => g.additional_rules.length === 1)).toBe(true);
   });
 
-  it("keeps guests' deck text in the game notes, one line per guest seat", () => {
-    expect(res.games.map((g) => g.notes)).toEqual([
-      "Guest seat 3: Some Guest Deck - Zed",
-      "Guest seat 1: Guest A\nGuest seat 3: Guest B",
-      "Guest seat 3: Lost Name Deck\nGuest seat 4: Other Lost Deck",
-      "Guest seat 2: Guest C",
-      "Guest seat 3: Guest D",
+  it("stores guests' deck text on the guest seat, not in the notes", () => {
+    expect(res.games.map((g) => g.notes)).toEqual(["", "", "", "", ""]);
+    const guests = res.seats.filter((s) => s.player_id === "RANDOM");
+    expect(guests.map((s) => [s.guest_deck, s.guest_name])).toEqual([
+      ["Some Guest Deck", "Zed"],
+      ["Guest A", ""],
+      ["Guest B", ""],
+      ["Lost Name Deck", ""], // deck-only rows are guests too
+      ["Other Lost Deck", ""],
+      ["Guest C", ""],
+      ["Guest D", ""],
     ]);
-    expect(res.seats.filter((s) => s.player_id === "RANDOM").every((s) => s.deck_id === "")).toBe(true);
+    expect(guests.every((s) => s.deck_id === "" && s.guest_added_by === "")).toBe(true);
+    expect(res.seats.filter((s) => s.player_id !== "RANDOM").every((s) => !s.guest_name && !s.guest_deck)).toBe(true);
   });
 
   it("applies commander seeds by owner|name or name|colors, with partner pairs", () => {
@@ -286,11 +300,12 @@ Decks:,🟦🟥⬜Kestrel (Bo),🟥⬜🟦Kestrel,⬛Bramble (ana)
     expect(deckOf(seatsOf(2)[2].deck_id)).toMatchObject({ owner_player_id: "cy", name: "Own (Cy)" });
   });
 
-  it("appends guests' deck text to the notes, after the existing notes", () => {
-    expect(res.games[0].notes).toBe("close game · second line\nGuest seat 4: Goblin Pile (with Zed's sleeves, lol)");
+  it("keeps real notes and puts guests' deck text on their seats", () => {
+    expect(res.games[0].notes).toBe("close game · second line");
+    expect(seatsOf(0)[3]).toMatchObject({ player_id: "RANDOM", guest_deck: "Goblin Pile (with Zed's sleeves, lol)", guest_name: "" });
     // "RANDOM_Seat3" in the player column is a guest too.
-    expect(seatsOf(1)[2]).toMatchObject({ player_id: "RANDOM", deck_id: "", is_winner: true });
-    expect(res.games[1].notes).toBe("Guest seat 3: Wizard Tribal - Zed");
+    expect(seatsOf(1)[2]).toMatchObject({ player_id: "RANDOM", deck_id: "", is_winner: true, guest_deck: "Wizard Tribal", guest_name: "Zed" });
+    expect(res.games[1].notes).toBe("");
     expect(res.players.map((p) => p.player_id)).toEqual(["ana", "bo", "cy"]);
   });
 

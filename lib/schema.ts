@@ -1,8 +1,14 @@
 // App-level record types shared by pages, the data layer and the migration.
 // Storage tables live in lib/db/schema.ts; lib/data.ts maps between the two.
 
-/** Guest seats use this player_id and never carry a deck. */
+/** Guest seats use this player_id and never carry a tracked deck. */
 export const GUEST_PLAYER_ID = "RANDOM";
+
+/** Length limits for a guest seat's free-text fields. */
+export const GUEST_NAME_MAX = 60;
+export const GUEST_DECK_MAX = 80;
+/** Length limit for a deck's list link. */
+export const LIST_URL_MAX = 300;
 
 export const BRACKETS = ["1", "2", "3", "4", "5"] as const;
 export const POD_SIZES = [3, 4, 5, 6] as const;
@@ -38,7 +44,32 @@ export interface Deck {
   notes: string;
   commander_status: CommanderStatus;
   active: boolean;
+  /** Link to the deck list (any http(s) site), or "". */
+  list_url: string;
 }
+
+/** Length limit for a deck version's note. */
+export const VERSION_NOTE_MAX = 500;
+
+/**
+ * A logged change to a deck, starting version `version_no` (2, 3, …) on
+ * `started_on`. Version 1 is implicit. See lib/db/schema.ts deckVersions.
+ */
+export interface DeckVersion {
+  id: string;
+  deck_id: string;
+  version_no: number;
+  /** ISO date the new version was first played. */
+  started_on: string;
+  note: string;
+  list_url: string;
+  created_by: string;
+  /** ISO timestamp */
+  created_at: string;
+}
+
+/** What stats need about a version (all the public page gets). */
+export type VersionRef = Pick<DeckVersion, "deck_id" | "version_no" | "started_on">;
 
 export interface DeckCommander {
   deck_id: string;
@@ -55,6 +86,14 @@ export interface GameSeat {
   player_id: string;
   deck_id: string;
   is_winner: boolean;
+  /**
+   * Guest seats only ("" otherwise): the guest's name, the deck they played
+   * (free text, not a tracked deck) and the player who brought them. Kept so a
+   * guest who joins later can claim their games. Never shown publicly.
+   */
+  guest_name: string;
+  guest_deck: string;
+  guest_added_by: string;
 }
 
 export interface Game {

@@ -8,6 +8,20 @@
       "when": 1793993303410,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794514375738,
+      "tag": "0001_guests_and_deck_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794514875110,
+      "tag": "0002_deck_versions",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { GUEST_PLAYER_ID, POD_SIZES, type GameWithSeats } from "./schema";
+import { GUEST_PLAYER_ID, POD_SIZES, type GameWithSeats, type VersionRef } from "./schema";
 
 export interface StatsFilter {
   /** Only count games with these pod sizes; empty = all. */
@@ -39,50 +39,143 @@ export function countedGames(games: GameWithSeats[], filter: StatsFilter = {}) {
 
 const rate = (wins: number, games: number) => (games === 0 ? 0 : wins / games);
 
+/**
+ * The win rate you'd expect from pod sizes alone: the average over these games
+ * of 1 / (number of seats), so a 3-player and a 4-player game give
+ * (1/3 + 1/4) / 2. Pass the games a player (or deck) was counted in. 0 for none.
+ */
+export function expectedWinRate(games: { seats: unknown[] }[]): number {
+  const played = games.filter((g) => g.seats.length > 0);
+  if (played.length === 0) return 0;
+  return played.reduce((sum, g) => sum + 1 / g.seats.length, 0) / played.length;
+}
+
 export interface PlayerStat {
   player_id: string;
   games: number;
   wins: number;
   winRate: number;
+  /** Expected win rate from the pod sizes of the same counted games (see expectedWinRate). */
+  expected: number;
 }
 
 export function playerStats(games: GameWithSeats[], filter: StatsFilter = {}): PlayerStat[] {
   const f = { ...DEFAULT_FILTER, ...filter };
-  const map = new Map<string, PlayerStat>();
+  const map = new Map<string, PlayerStat & { played: GameWithSeats[] }>();
   for (const g of countedGames(games, f)) {
     for (const s of g.seats) {
       if (f.ignoredPlayers.includes(s.player_id)) continue;
-      const st = map.get(s.player_id) ?? { player_id: s.player_id, games: 0, wins: 0, winRate: 0 };
+      const st = map.get(s.player_id) ?? { player_id: s.player_id, games: 0, wins: 0, winRate: 0, expected: 0, played: [] };
       st.games++;
       if (s.is_winner) st.wins++;
+      st.played.push(g);
       map.set(s.player_id, st);
     }
   }
   return [...map.values()]
-    .map((s) => ({ ...s, winRate: rate(s.wins, s.games) }))
+    .map(({ played, ...s }) => ({ ...s, winRate: rate(s.wins, s.games), expected: expectedWinRate(played) }))
     .sort((a, b) => b.winRate - a.winRate || b.games - a.games);
+}
+
+// ---------------------------------------------------------------------------
+// Deck versions
+
+/** Group versions by deck, each list sorted by started_on. */
+export function versionsByDeck(versions: VersionRef[]): Map<string, VersionRef[]> {
+  const m = new Map<string, VersionRef[]>();
+  for (const v of versions) m.set(v.deck_id, [...(m.get(v.deck_id) ?? []), v]);
+  for (const list of m.values()) list.sort((a, b) => a.started_on.localeCompare(b.started_on));
+  return m;
+}
+
+/**
+ * The version of a deck a game on `date` used: the latest version that started
+ * on or before that date (a game on the day of a change counts toward the new
+ * version), or 1 when no change had been logged yet. `versions` is one deck's.
+ */
+export function versionOn(versions: VersionRef[], date: string): number {
+  let v = 1;
+  for (const x of versions) if (x.started_on <= date && x.version_no > v) v = x.version_no;
+  return v;
+}
+
+export interface VersionStat {
+  version_no: number;
+  /** "" for version 1 (it starts with the deck). */
+  started_on: string;
+  /** Day before the next version started, or "" for the current version. */
+  until: string;
+  games: number;
+  wins: number;
+  winRate: number;
+  expected: number;
+  firstPlayed: string;
+  lastPlayed: string;
+}
+
+const dayBefore = (iso: string) => new Date(Date.parse(`${iso}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+
+/**
+ * One deck's record per version (all pilots), from counted games only, oldest
+ * version first. Version 1 is always included, even with no games.
+ */
+export function deckVersionStats(games: GameWithSeats[], deckId: string, versions: VersionRef[], filter: StatsFilter = {}): VersionStat[] {
+  const mine = [...versions.filter((v) => v.deck_id === deckId)].sort((a, b) => a.version_no - b.version_no);
+  const rows: (VersionStat & { played: GameWithSeats[] })[] = [{ version_no: 1, started_on: "" }, ...mine].map((v, i, all) => ({
+    version_no: v.version_no,
+    started_on: v.started_on,
+    until: all[i + 1] ? dayBefore(all[i + 1].started_on) : "",
+    games: 0,
+    wins: 0,
+    winRate: 0,
+    expected: 0,
+    firstPlayed: "",
+    lastPlayed: "",
+    played: [],
+  }));
+  for (const g of countedGames(games, { ...filter, ignoredPlayers: [] })) {
+    const seats = g.seats.filter((s) => s.deck_id === deckId);
+    if (seats.length === 0) continue;
+    const row = rows.find((r) => r.version_no === versionOn(mine, g.date))!;
+    for (const s of seats) {
+      row.games++;
+      if (s.is_winner) row.wins++;
+      row.played.push(g);
+    }
+    if (!row.firstPlayed || g.date < row.firstPlayed) row.firstPlayed = g.date;
+    if (g.date > row.lastPlayed) row.lastPlayed = g.date;
+  }
+  return rows.map(({ played, ...r }) => ({ ...r, winRate: rate(r.wins, r.games), expected: expectedWinRate(played) }));
 }
 
 export interface DeckStat {
   deck_id: string;
   player_id: string;
+  /** Set when split by version. */
+  version_no?: number;
   games: number;
   wins: number;
   winRate: number;
   lastPlayed: string;
 }
 
-/** Per deck, per pilot (a borrowed deck shows up once per player). */
-export function deckStats(games: GameWithSeats[], filter: StatsFilter = {}): DeckStat[] {
+/**
+ * Per deck, per pilot (a borrowed deck shows up once per player). With
+ * `versions`, also split by deck version (one row per deck, pilot and version).
+ */
+export function deckStats(games: GameWithSeats[], filter: StatsFilter = {}, versions?: VersionRef[]): DeckStat[] {
   const f = { ...DEFAULT_FILTER, ...filter };
+  const byDeck = versions ? versionsByDeck(versions) : undefined;
   const map = new Map<string, DeckStat>();
   for (const g of countedGames(games, f)) {
     for (const s of g.seats) {
       if (!s.deck_id || f.ignoredPlayers.includes(s.player_id)) continue;
-      const key = `${s.player_id}|${s.deck_id}`;
+      const version_no = byDeck ? versionOn(byDeck.get(s.deck_id) ?? [], g.date) : undefined;
+      const key = `${s.player_id}|${s.deck_id}|${version_no ?? ""}`;
       const st = map.get(key) ?? {
         deck_id: s.deck_id,
         player_id: s.player_id,
+        ...(version_no === undefined ? {} : { version_no }),
         games: 0,
         wins: 0,
         winRate: 0,
@@ -94,9 +187,16 @@ export function deckStats(games: GameWithSeats[], filter: StatsFilter = {}): Dec
       map.set(key, st);
     }
   }
-  return [...map.values()]
-    .map((s) => ({ ...s, winRate: rate(s.wins, s.games) }))
-    .sort((a, b) => b.games - a.games || b.winRate - a.winRate);
+  const rows = [...map.values()].map((s) => ({ ...s, winRate: rate(s.wins, s.games) }));
+  if (!byDeck) return rows.sort((a, b) => b.games - a.games || b.winRate - a.winRate);
+  // Split by version: keep each deck's versions together (most-played deck first), oldest version first.
+  const pair = (s: DeckStat) => `${s.player_id}|${s.deck_id}`;
+  const total = new Map<string, number>();
+  for (const s of rows) total.set(pair(s), (total.get(pair(s)) ?? 0) + s.games);
+  return rows.sort(
+    (a, b) =>
+      total.get(pair(b))! - total.get(pair(a))! || pair(a).localeCompare(pair(b)) || (a.version_no ?? 1) - (b.version_no ?? 1),
+  );
 }
 
 export interface SeatRow {

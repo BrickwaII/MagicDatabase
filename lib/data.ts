@@ -18,7 +18,10 @@ import {
 import { canApprove, canEditDeck, canEditGame, canManageLookups, canManagePlayers, isAdmin } from "./permissions";
 import {
   BRACKETS,
+  GUEST_DECK_MAX,
+  GUEST_NAME_MAX,
   GUEST_PLAYER_ID,
+  LIST_URL_MAX,
   MAX_SEATS,
   MIN_SEATS,
   normalizeColors,
@@ -108,6 +111,7 @@ const toDeck = (r: DeckRow): Deck => ({
   notes: r.notes,
   commander_status: r.commanderStatus,
   active: r.active,
+  list_url: r.listUrl ?? "",
 });
 
 const toCommander = (r: CmdRow): DeckCommander => ({
@@ -125,6 +129,9 @@ const toSeat = (r: SeatRow): GameSeat => ({
   player_id: r.playerId ?? GUEST_PLAYER_ID,
   deck_id: r.deckId ?? "",
   is_winner: r.isWinner,
+  guest_name: r.guestName ?? "",
+  guest_deck: r.guestDeck ?? "",
+  guest_added_by: r.guestAddedBy ?? "",
 });
 
 const toGame = (r: GameRow, wcs: string[], rls: string[]): Game => ({
@@ -215,11 +222,15 @@ export interface GameFilter {
   status?: Game["status"] | Game["status"][];
 }
 
-/** Load games matching `where` (already group-scoped) with their seats, win conditions and rules. */
-async function loadGames(db: Conn, gid: string, where: SQL): Promise<GameWithSeats[]> {
-  const gameRows = await db.select().from(games).where(where).orderBy(desc(games.date), desc(games.dayGameNo));
+/**
+ * Load games matching `where` (already group-scoped), newest first, with their
+ * seats, win conditions and rules. `limit` loads only the newest that many.
+ */
+async function loadGames(db: Conn, gid: string, where: SQL, limit?: number): Promise<GameWithSeats[]> {
+  const ordered = db.select().from(games).where(where).orderBy(desc(games.date), desc(games.dayGameNo));
+  const gameRows = limit === undefined ? await ordered : await ordered.limit(limit);
   if (gameRows.length === 0) return [];
-  const ids = db.select({ id: games.id }).from(games).where(where);
+  const ids = limit === undefined ? db.select({ id: games.id }).from(games).where(where) : gameRows.map((g) => g.id);
   const [seatRows, wcRows, ruleRows] = await Promise.all([
     db
       .select()
@@ -255,8 +266,7 @@ async function loadGames(db: Conn, gid: string, where: SQL): Promise<GameWithSea
   }));
 }
 
-export async function listGames(filter: GameFilter = {}): Promise<GameWithSeats[]> {
-  const { db, gid } = await ctx();
+function gameFilterWhere(db: Db, gid: string, filter: GameFilter): SQL {
   const conds: SQL[] = [eq(games.groupId, gid)];
   const statuses = filter.status ? [filter.status].flat() : undefined;
   if (statuses) conds.push(inArray(games.status, statuses));
@@ -274,7 +284,30 @@ export async function listGames(filter: GameFilter = {}): Promise<GameWithSeats[
       ),
     );
   }
-  return loadGames(db, gid, and(...conds)!);
+  return and(...conds)!;
+}
+
+export async function listGames(filter: GameFilter = {}): Promise<GameWithSeats[]> {
+  const { db, gid } = await ctx();
+  return loadGames(db, gid, gameFilterWhere(db, gid, filter));
+}
+
+/**
+ * The newest `limit` games matching the filter, how many match in all, and
+ * the id of the next game after these (for "Show more" to scroll to).
+ */
+export async function listGamesPage(
+  filter: GameFilter,
+  limit: number,
+): Promise<{ games: GameWithSeats[]; total: number; nextId: string | null }> {
+  const { db, gid } = await ctx();
+  const where = gameFilterWhere(db, gid, filter);
+  const [[{ total }], rows] = await Promise.all([
+    db.select({ total: sql<number>`count(*)::int` }).from(games).where(where),
+    // One extra row tells us which game "Show more" reveals first.
+    loadGames(db, gid, where, Math.max(0, limit) + 1),
+  ]);
+  return { games: rows.slice(0, limit), total, nextId: rows[limit]?.game_id ?? null };
 }
 
 export async function getGame(id: string): Promise<GameWithSeats | null> {
@@ -285,7 +318,7 @@ export async function getGame(id: string): Promise<GameWithSeats | null> {
 // ---------------------------------------------------------------------------
 // Games
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD");
+export const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD");
 
 export const gameInputSchema = z.object({
   date: isoDate,
@@ -300,6 +333,10 @@ export const gameInputSchema = z.object({
         player_id: z.string().min(1, "Every seat needs a player"),
         deck_id: z.string().default(""),
         is_winner: z.boolean().default(false),
+        // Guest seats only; ignored for members.
+        guest_name: z.string().trim().max(GUEST_NAME_MAX, `Guest name: at most ${GUEST_NAME_MAX} characters`).default(""),
+        guest_deck: z.string().trim().max(GUEST_DECK_MAX, `Guest deck: at most ${GUEST_DECK_MAX} characters`).default(""),
+        guest_added_by: z.string().default(""),
       }),
     )
     .min(MIN_SEATS, `A game needs at least ${MIN_SEATS} players`)
@@ -333,11 +370,19 @@ export async function validateGame(input: GameInput) {
       if (!s.deck_id) throw new AppError(`Seat ${i + 1}: choose a deck`);
       if (!deckById.has(s.deck_id)) throw new AppError(`Seat ${i + 1}: unknown deck`);
     }
+    // Who brought the guest must be a player of this group (the database
+    // checks it too); inactive players are allowed so old games still save.
+    if (guest && s.guest_added_by && !playerIds.has(s.guest_added_by)) {
+      throw new AppError(`Seat ${i + 1}: unknown player for "brought by"`);
+    }
     return {
       seat: i + 1,
       player_id: s.player_id,
       deck_id: guest ? "" : s.deck_id,
       is_winner: g.result === "won" ? s.is_winner : false,
+      guest_name: guest ? s.guest_name : "",
+      guest_deck: guest ? s.guest_deck : "",
+      guest_added_by: guest ? s.guest_added_by : "",
     };
   });
 
@@ -393,14 +438,20 @@ async function writeGameChildren(tx: Conn, gid: string, game: Game, seats: GameS
   }
 }
 
-export const seatValues = (gid: string, s: GameSeat): typeof gameSeats.$inferInsert => ({
-  groupId: gid,
-  gameId: s.game_id,
-  seat: s.seat,
-  playerId: s.player_id === GUEST_PLAYER_ID ? null : s.player_id,
-  deckId: s.player_id === GUEST_PLAYER_ID || !s.deck_id ? null : s.deck_id,
-  isWinner: s.is_winner,
-});
+export const seatValues = (gid: string, s: GameSeat): typeof gameSeats.$inferInsert => {
+  const guest = s.player_id === GUEST_PLAYER_ID;
+  return {
+    groupId: gid,
+    gameId: s.game_id,
+    seat: s.seat,
+    playerId: guest ? null : s.player_id,
+    deckId: guest || !s.deck_id ? null : s.deck_id,
+    isWinner: s.is_winner,
+    guestName: (guest && s.guest_name?.trim()) || null,
+    guestDeck: (guest && s.guest_deck?.trim()) || null,
+    guestAddedBy: (guest && s.guest_added_by) || null,
+  };
+};
 
 export const gameValues = (gid: string, g: Game): typeof games.$inferInsert => ({
   groupId: gid,
@@ -582,6 +633,24 @@ const commanderInput = z.object({
   typed_name: z.string().default(""),
 });
 
+/** True for an absolute http:// or https:// URL with a host. */
+export function isHttpUrl(v: string) {
+  try {
+    const u = new URL(v);
+    return (u.protocol === "http:" || u.protocol === "https:") && !!u.hostname;
+  } catch {
+    return false;
+  }
+}
+
+/** An optional deck list link: "" or an http(s) URL of at most LIST_URL_MAX characters. */
+export const listUrlSchema = z
+  .string()
+  .trim()
+  .max(LIST_URL_MAX, `Deck list link: at most ${LIST_URL_MAX} characters`)
+  .refine((v) => v === "" || isHttpUrl(v), "Deck list link must be a web address starting with http:// or https://")
+  .default("");
+
 export const deckInputSchema = z.object({
   owner_player_id: z.string().min(1),
   name: z.string().trim().min(1, "Give the deck a name").max(80),
@@ -589,6 +658,7 @@ export const deckInputSchema = z.object({
   bracket: z.union([z.enum(BRACKETS), z.literal("")]).default(""),
   notes: z.string().max(2000).default(""),
   commanders: z.array(commanderInput).max(3).default([]),
+  list_url: listUrlSchema,
 });
 export type DeckInput = z.input<typeof deckInputSchema>;
 
@@ -633,6 +703,7 @@ export const deckValues = (gid: string, d: Deck): typeof decks.$inferInsert => (
   notes: d.notes,
   commanderStatus: d.commander_status,
   active: d.active,
+  listUrl: d.list_url || null,
 });
 
 export const commanderValues = (gid: string, c: DeckCommander): typeof deckCommanders.$inferInsert => ({
@@ -681,6 +752,7 @@ export async function createDeck(input: DeckInput, actor: Player): Promise<Deck>
       notes: d.notes.trim(),
       commander_status: commanderStatusFor(cmds),
       active: true,
+      list_url: d.list_url,
     };
     await tx.insert(decks).values(deckValues(gid, deck));
     await replaceCommanders(tx, gid, deck_id, cmds);
@@ -721,6 +793,7 @@ export async function updateDeck(id: string, input: DeckInput & { active?: boole
       notes: d.notes.trim(),
       commander_status: commanderStatusFor(cmds),
       active: input.active ?? before.active,
+      list_url: d.list_url,
     };
     const beforeCmds = (
       await tx

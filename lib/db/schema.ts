@@ -68,12 +68,48 @@ export const decks = pgTable(
     notes: text("notes").notNull().default(""),
     commanderStatus: commanderStatusEnum("commander_status").notNull().default("none"),
     active: boolean("active").notNull().default(true),
+    /** Optional link to the deck list (Moxfield, Archidekt, any http(s) site). */
+    listUrl: text("list_url"),
   },
   (t) => [
     primaryKey({ columns: [t.groupId, t.id] }),
     foreignKey({ columns: [t.groupId, t.ownerPlayerId], foreignColumns: [players.groupId, players.id] }).onUpdate("cascade"),
     index("decks_owner_idx").on(t.groupId, t.ownerPlayerId),
     check("decks_bracket_check", sql`${t.bracket} between 1 and 5`),
+  ],
+);
+
+/**
+ * Changes to a deck over time. Version 1 is implicit (no row): every deck starts
+ * as v1, and each row here starts a new version (2, 3, …) on `started_on`. A
+ * game uses the latest version whose started_on is on or before the game's
+ * date, so a game played the day of a change counts toward the new version.
+ * version_no always follows started_on order (renumbered on every change).
+ */
+export const deckVersions = pgTable(
+  "deck_versions",
+  {
+    groupId: groupId(),
+    id: text("id").notNull(),
+    deckId: text("deck_id").notNull(),
+    versionNo: integer("version_no").notNull(),
+    startedOn: date("started_on", { mode: "string" }).notNull(),
+    /** What changed, e.g. "Cut 6 removal, added Rhystic Study". */
+    note: text("note").notNull().default(""),
+    /** The deck list as of this version (any http(s) site), if given. */
+    listUrl: text("list_url"),
+    /** Player id of whoever logged the change. */
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.groupId, t.id] }),
+    unique("deck_versions_deck_no_unique").on(t.groupId, t.deckId, t.versionNo),
+    unique("deck_versions_deck_date_unique").on(t.groupId, t.deckId, t.startedOn),
+    foreignKey({ columns: [t.groupId, t.deckId], foreignColumns: [decks.groupId, decks.id] })
+      .onDelete("cascade")
+      .onUpdate("cascade"),
+    check("deck_versions_no_check", sql`${t.versionNo} >= 2`),
   ],
 );
 
@@ -156,12 +192,32 @@ export const gameSeats = pgTable(
     /** Null for a guest. */
     deckId: text("deck_id"),
     isWinner: boolean("is_winner").notNull().default(false),
+    // Guest seats only (player_id null). Kept so a guest who joins later can
+    // claim the games they played: guests can share names, so the deck they
+    // used and who brought them help tell them apart.
+    /** What the guest is called, e.g. "Quinn". */
+    guestName: text("guest_name"),
+    /** Free-text commander or deck nickname the guest played. */
+    guestDeck: text("guest_deck"),
+    /** The player in this group who brought or added the guest. */
+    guestAddedBy: text("guest_added_by"),
   },
   (t) => [
     primaryKey({ columns: [t.groupId, t.gameId, t.seat] }),
     foreignKey({ columns: [t.groupId, t.gameId], foreignColumns: [games.groupId, games.id] }).onDelete("cascade"),
     foreignKey({ columns: [t.groupId, t.playerId], foreignColumns: [players.groupId, players.id] }).onUpdate("cascade"),
     foreignKey({ columns: [t.groupId, t.deckId], foreignColumns: [decks.groupId, decks.id] }).onUpdate("cascade"),
+    // Composite, so the guest's host is always a player of the same group. A
+    // null guest_added_by skips the check (MATCH SIMPLE).
+    foreignKey({
+      name: "game_seats_guest_added_by_fk",
+      columns: [t.groupId, t.guestAddedBy],
+      foreignColumns: [players.groupId, players.id],
+    }).onUpdate("cascade"),
+    check(
+      "game_seats_guest_fields_check",
+      sql`${t.playerId} is null or (${t.guestName} is null and ${t.guestDeck} is null and ${t.guestAddedBy} is null)`,
+    ),
     index("game_seats_player_idx").on(t.groupId, t.playerId),
     index("game_seats_deck_idx").on(t.groupId, t.deckId),
   ],

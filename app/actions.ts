@@ -17,6 +17,7 @@ import {
   type DeckInput,
   type GameInput,
 } from "@/lib/data";
+import { createDeckVersion, deleteDeckVersion, updateDeckVersion, type VersionInput } from "@/lib/versions";
 
 export type ActionResult = { ok: true; id: string } | { ok: false; error: string };
 
@@ -87,6 +88,27 @@ export async function saveDeck(payload: { id?: string; active?: boolean; input: 
       ? (await updateDeck(payload.id, { ...payload.input, active: payload.active }, actor)).deck_id
       : (await createDeck(payload.input, actor)).deck_id,
   );
+  if (res.ok) revalidatePath("/", "layout");
+  return res;
+}
+
+export async function saveDeckVersion(payload: { deckId: string; id?: string; input: VersionInput }): Promise<ActionResult> {
+  const actor = await requirePlayer();
+  const res = await attempt(async () =>
+    payload.id
+      ? (await updateDeckVersion(payload.deckId, payload.id, payload.input, actor)).id
+      : (await createDeckVersion(payload.deckId, payload.input, actor)).id,
+  );
+  if (res.ok) revalidatePath("/", "layout");
+  return res;
+}
+
+export async function removeDeckVersion(payload: { deckId: string; id: string }): Promise<ActionResult> {
+  const actor = await requirePlayer();
+  const res = await attempt(async () => {
+    await deleteDeckVersion(payload.deckId, payload.id, actor);
+    return payload.id;
+  });
   if (res.ok) revalidatePath("/", "layout");
   return res;
 }

@@ -4,12 +4,27 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { saveGame } from "@/app/actions";
 import { CloseIcon, CrownIcon, DownIcon, UpIcon } from "./Icons";
-import { BRACKETS, GUEST_PLAYER_ID, MAX_SEATS, MIN_SEATS, type Deck, type GameResult, type Lookup, type PlayerOption } from "@/lib/schema";
+import {
+  BRACKETS,
+  GUEST_DECK_MAX,
+  GUEST_NAME_MAX,
+  GUEST_PLAYER_ID,
+  MAX_SEATS,
+  MIN_SEATS,
+  type Deck,
+  type GameResult,
+  type Lookup,
+  type PlayerOption,
+} from "@/lib/schema";
 
 interface SeatState {
   player_id: string;
   deck_id: string;
   is_winner: boolean;
+  /** Guest seats only. */
+  guest_name: string;
+  guest_deck: string;
+  guest_added_by: string;
 }
 
 export interface GameFormInitial {
@@ -19,7 +34,7 @@ export interface GameFormInitial {
   win_conditions: string[];
   additional_rules: string[];
   notes: string;
-  seats: SeatState[];
+  seats: (Pick<SeatState, "player_id" | "deck_id" | "is_winner"> & Partial<SeatState>)[];
 }
 
 interface Props {
@@ -35,7 +50,7 @@ interface Props {
   saveNote?: string;
 }
 
-const emptySeat = (): SeatState => ({ player_id: "", deck_id: "", is_winner: false });
+const emptySeat = (): SeatState => ({ player_id: "", deck_id: "", is_winner: false, guest_name: "", guest_deck: "", guest_added_by: "" });
 
 function localToday() {
   const d = new Date();
@@ -57,7 +72,14 @@ export function GameForm({ players, decks, winConditions, rules, meId, gameId, r
   const [ruleIds, setRuleIds] = useState<string[]>(initial?.additional_rules ?? []);
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [seats, setSeats] = useState<SeatState[]>(
-    initial?.seats ?? [{ player_id: meId, deck_id: "", is_winner: false }, emptySeat(), emptySeat(), emptySeat()],
+    initial?.seats.map((s) => ({
+      player_id: s.player_id,
+      deck_id: s.deck_id,
+      is_winner: s.is_winner,
+      guest_name: s.guest_name ?? "",
+      guest_deck: s.guest_deck ?? "",
+      guest_added_by: s.guest_added_by ?? "",
+    })) ?? [{ ...emptySeat(), player_id: meId }, emptySeat(), emptySeat(), emptySeat()],
   );
 
   useEffect(() => {
@@ -100,7 +122,12 @@ export function GameForm({ players, decks, winConditions, rules, meId, gameId, r
     });
   }
 
-  const winnerNames = result === "won" ? seats.filter((s) => s.is_winner && s.player_id).map((s) => (s.player_id === GUEST_PLAYER_ID ? "Guest" : playerName(s.player_id))) : [];
+  const winnerNames =
+    result === "won"
+      ? seats
+          .filter((s) => s.is_winner && s.player_id)
+          .map((s) => (s.player_id === GUEST_PLAYER_ID ? (s.guest_name.trim() ? `Guest · ${s.guest_name.trim()}` : "Guest") : playerName(s.player_id)))
+      : [];
   const resultOptions: { value: GameResult; label: string }[] = [
     { value: "won", label: "Won" },
     { value: "draw", label: "Draw" },
@@ -182,7 +209,12 @@ export function GameForm({ players, decks, winConditions, rules, meId, gameId, r
                       className="player"
                       aria-label={`Seat ${i + 1} player`}
                       value={s.player_id}
-                      onChange={(e) => setSeat(i, { player_id: e.target.value, deck_id: "" })}
+                      onChange={(e) => {
+                        const player_id = e.target.value;
+                        // A new guest defaults to being brought by whoever is logging the game.
+                        const host = player_id === GUEST_PLAYER_ID && !s.guest_added_by ? { guest_added_by: meId } : {};
+                        setSeat(i, { player_id, deck_id: "", ...host });
+                      }}
                       required
                     >
                       <option value="">Player…</option>
@@ -234,6 +266,48 @@ export function GameForm({ players, decks, winConditions, rules, meId, gameId, r
                     <span>{won ? "Winner" : "Won?"}</span>
                   </label>
                 </div>
+                {guest && (
+                  <div className="guest-fields">
+                    <label>
+                      <span className="lbl">Guest name</span>
+                      <input
+                        value={s.guest_name}
+                        onChange={(e) => setSeat(i, { guest_name: e.target.value })}
+                        maxLength={GUEST_NAME_MAX}
+                        placeholder="e.g. Alex"
+                        autoComplete="off"
+                        aria-label={`Seat ${i + 1} guest name`}
+                      />
+                    </label>
+                    <label>
+                      <span className="lbl">Their deck</span>
+                      <input
+                        value={s.guest_deck}
+                        onChange={(e) => setSeat(i, { guest_deck: e.target.value })}
+                        maxLength={GUEST_DECK_MAX}
+                        placeholder="e.g. Yuriko"
+                        autoComplete="off"
+                        aria-label={`Seat ${i + 1} guest deck`}
+                      />
+                    </label>
+                    <label className="guest-host">
+                      <span className="lbl">Brought by</span>
+                      <select
+                        value={s.guest_added_by}
+                        onChange={(e) => setSeat(i, { guest_added_by: e.target.value })}
+                        aria-label={`Seat ${i + 1} guest brought by`}
+                      >
+                        <option value="">Not recorded</option>
+                        {players.map((p) => (
+                          <option key={p.player_id} value={p.player_id}>
+                            {p.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <span className="small muted guest-hint">Optional. Never shown on the public stats page.</span>
+                  </div>
+                )}
               </li>
             );
           })}

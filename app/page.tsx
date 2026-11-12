@@ -21,19 +21,30 @@ export default async function Home() {
   const recent = games.filter((g) => g.status === "approved").slice(0, 8);
 
   const total = mine?.games ?? 0;
+  // Percentages to one decimal; the difference is taken from the shown values so it adds up.
+  const winPct = Math.round((mine?.winRate ?? 0) * 1000) / 10;
+  const expPct = Math.round((mine?.expected ?? 0) * 1000) / 10;
+  const diff = Math.round((winPct - expPct) * 10) / 10;
   return (
     <div className="stack">
       <div className="hello">
         <h1>Hi, {me.display_name}</h1>
       </div>
 
-      <section className="record" aria-label="Your record">
-        <div className="record-num">{mine ? `${mine.wins}–${mine.games - mine.wins}` : "0–0"}</div>
-        <div className="record-label">Your record</div>
+      <section className="record" aria-label="Your win rate">
+        <div className="record-num">{total > 0 ? `${winPct.toFixed(1)}%` : "–"}</div>
+        <div className="record-label">Your win rate</div>
         <div className="record-sub">
           {total > 0 ? (
             <>
-              {Math.round((mine?.winRate ?? 0) * 100)}% win rate over {total} game{total === 1 ? "" : "s"}.{" "}
+              {mine!.wins} of {total} game{total === 1 ? "" : "s"} won
+              <span className="record-expected">
+                Expected {expPct.toFixed(1)}%
+                <span className="record-diff">
+                  {diff > 0 ? "+" : diff < 0 ? "−" : "±"}
+                  {Math.abs(diff).toFixed(1)} pts vs expected
+                </span>
+              </span>
               <Link href={`/stats?view=seats&player=${me.player_id}`}>Your seat stats</Link>
             </>
           ) : (

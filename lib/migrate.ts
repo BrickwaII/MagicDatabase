@@ -261,6 +261,19 @@ export interface MigrateOptions {
   stickyRules?: boolean;
 }
 
+/**
+ * A guest seat's deck text from the old sheet, e.g. "Kite Tribal - Quinn", into the
+ * deck they played and their name: split on the last " - " (deck left, name
+ * right). Without " - " the whole text is the deck and the name stays empty;
+ * parentheses are never read as a name ("Niv Mizzet (Life)" is a deck).
+ */
+export function parseGuestDeck(text: string): { guest_deck: string; guest_name: string } {
+  const t = text.trim();
+  const i = t.lastIndexOf(" - ");
+  if (i === -1) return { guest_deck: t, guest_name: "" };
+  return { guest_deck: t.slice(0, i).trim(), guest_name: t.slice(i + 3).trim() };
+}
+
 /** "RANDOM_Seat3", "Random_Seat1", "Guest seat 2", "Seat 4" → 3, 1, 2, 4 */
 const seatRef = (v: string) => {
   const m = v.trim().match(/^(?:(?:random|guest)[\s_-]*)?seat[\s_#-]*(\d+)$/i);
@@ -348,6 +361,7 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
       notes: precon ? "Precon" : "",
       commander_status: "unresolved",
       active: true,
+      list_url: "",
     };
     decks.push(deck);
     deckByKey.set(key, deck);
@@ -531,7 +545,6 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
       .map((row, idx) => ({ ...row, order: Number(cell(row.r, "seat")) || idx + 1 }))
       .sort((a, b) => a.order - b.order);
 
-    const guestNotes: string[] = [];
     const gameSeats: GameSeat[] = ordered.map(({ r }, idx) => {
       const name = cell(r, "player");
       const deckCell = cell(r, "deck");
@@ -542,8 +555,8 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
       let deck_id = "";
       const borrowed = pid !== GUEST_PLAYER_ID && deckCell ? borrowedFrom(pid, deckCell) : undefined;
       // Guests' decks (free text like "Caesar - <guest name>") are not imported as
-      // decks; the text is kept in the game's notes instead (below).
-      if (pid === GUEST_PLAYER_ID && deckCell) guestNotes.push(`Guest seat ${idx + 1}: ${deckCell}`);
+      // decks; they become the seat's guest_deck and guest_name.
+      const guest = pid === GUEST_PLAYER_ID ? parseGuestDeck(deckCell) : { guest_deck: "", guest_name: "" };
       if (borrowed) deck_id = lenderDeck(borrowed.owner, borrowed.cell, deckCell).deck_id;
       else if (pid !== GUEST_PLAYER_ID && deckCell) {
         const own = findOwnDeck(pid, deckCell);
@@ -560,7 +573,7 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
         // Kept as a seat with no deck: the game and the result still count.
         warnings.push(`${label}: ${name} has no deck recorded; seat imported without a deck.`);
       }
-      return { game_id: gameId, seat: idx + 1, player_id: pid, deck_id, is_winner: false };
+      return { game_id: gameId, seat: idx + 1, player_id: pid, deck_id, is_winner: false, ...guest, guest_added_by: "" };
     });
 
     // Winner: the real sheet has one merged "Winner" cell per game holding a
@@ -621,7 +634,7 @@ export function migrate(old: OldSheet, opts: MigrateOptions = {}): MigrationResu
       brackets: [...brackets],
       win_conditions: [...new Set(splitMulti(first("winConditions")).map((w) => lookupId(winConditions, w)))],
       additional_rules: [...additional_rules],
-      notes: [g.rows.map(({ r }) => cell(r, "notes")).filter(Boolean).join(" · "), ...guestNotes].filter(Boolean).join("\n"),
+      notes: g.rows.map(({ r }) => cell(r, "notes")).filter(Boolean).join(" · "),
       submitted_by: "import",
       approved_by: "import",
       rev: 1,
