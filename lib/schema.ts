@@ -1,46 +1,14 @@
-// Spreadsheet layout: one tab per entity, one row per record, a header row,
-// no merged cells, no formulas. Column order here is the order written to the
-// sheet; reads map columns by header name so a reordered sheet still works.
+// App-level record types shared by pages, the data layer and the migration.
+// Storage tables live in lib/db/schema.ts; lib/data.ts maps between the two.
 
-export const TABS = {
-  Players: ["player_id", "display_name", "email", "role", "active"],
-  Decks: [
-    "deck_id",
-    "owner_player_id",
-    "name",
-    "colors",
-    "bracket",
-    "notes",
-    "commander_status",
-    "active",
-  ],
-  DeckCommanders: ["deck_id", "slot", "role", "scryfall_oracle_id", "card_name", "typed_name"],
-  Games: [
-    "game_id",
-    "day_game_no",
-    "date",
-    "status",
-    "result",
-    "brackets",
-    "win_conditions",
-    "additional_rules",
-    "notes",
-    "submitted_by",
-    "approved_by",
-    "rev",
-    "reject_reason",
-  ],
-  GameSeats: ["game_id", "seat", "player_id", "deck_id", "is_winner"],
-  WinConditions: ["id", "name"],
-  Rules: ["id", "name"],
-  AuditLog: ["timestamp", "user", "entity", "entity_id", "action", "before", "after"],
-} as const;
-
-export type TabName = keyof typeof TABS;
-export type RawRow = Record<string, string>;
-
-/** Guest seats use this player_id and never carry a deck. */
+/** Guest seats use this player_id and never carry a tracked deck. */
 export const GUEST_PLAYER_ID = "RANDOM";
+
+/** Length limits for a guest seat's free-text fields. */
+export const GUEST_NAME_MAX = 60;
+export const GUEST_DECK_MAX = 80;
+/** Length limit for a deck's list link. */
+export const LIST_URL_MAX = 300;
 
 export const BRACKETS = ["1", "2", "3", "4", "5"] as const;
 export const POD_SIZES = [3, 4, 5, 6] as const;
@@ -61,6 +29,11 @@ export interface Player {
   active: boolean;
 }
 
+/** What client components get about a player: never the email or role. */
+export type PlayerOption = Pick<Player, "player_id" | "display_name">;
+export const playerOptions = (ps: Player[]): PlayerOption[] =>
+  ps.map(({ player_id, display_name }) => ({ player_id, display_name }));
+
 export interface Deck {
   deck_id: string;
   owner_player_id: string;
@@ -71,7 +44,32 @@ export interface Deck {
   notes: string;
   commander_status: CommanderStatus;
   active: boolean;
+  /** Link to the deck list (any http(s) site), or "". */
+  list_url: string;
 }
+
+/** Length limit for a deck version's note. */
+export const VERSION_NOTE_MAX = 500;
+
+/**
+ * A logged change to a deck, starting version `version_no` (2, 3, …) on
+ * `started_on`. Version 1 is implicit. See lib/db/schema.ts deckVersions.
+ */
+export interface DeckVersion {
+  id: string;
+  deck_id: string;
+  version_no: number;
+  /** ISO date the new version was first played. */
+  started_on: string;
+  note: string;
+  list_url: string;
+  created_by: string;
+  /** ISO timestamp */
+  created_at: string;
+}
+
+/** What stats need about a version (all the public page gets). */
+export type VersionRef = Pick<DeckVersion, "deck_id" | "version_no" | "started_on">;
 
 export interface DeckCommander {
   deck_id: string;
@@ -88,6 +86,14 @@ export interface GameSeat {
   player_id: string;
   deck_id: string;
   is_winner: boolean;
+  /**
+   * Guest seats only ("" otherwise): the guest's name, the deck they played
+   * (free text, not a tracked deck) and the player who brought them. Kept so a
+   * guest who joins later can claim their games. Never shown publicly.
+   */
+  guest_name: string;
+  guest_deck: string;
+  guest_added_by: string;
 }
 
 export interface Game {
@@ -117,6 +123,7 @@ export interface Lookup {
 }
 
 export interface AuditEntry {
+  /** ISO timestamp */
   timestamp: string;
   user: string;
   entity: string;
@@ -125,95 +132,6 @@ export interface AuditEntry {
   before: string;
   after: string;
 }
-
-// ---------------------------------------------------------------------------
-// Row <-> record conversion
-
-const bool = (v: string | undefined) => /^(true|yes|1)$/i.test((v ?? "").trim());
-const int = (v: string | undefined, fallback = 0) => {
-  const n = parseInt((v ?? "").trim(), 10);
-  return Number.isFinite(n) ? n : fallback;
-};
-export const splitList = (v: string | undefined) =>
-  (v ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-const joinList = (v: string[]) => v.join(", ");
-
-function oneOf<T extends string>(v: string | undefined, allowed: readonly T[], fallback: T): T {
-  const s = (v ?? "").trim().toLowerCase() as T;
-  return allowed.includes(s) ? s : fallback;
-}
-
-export const parse = {
-  player: (r: RawRow): Player => ({
-    player_id: r.player_id ?? "",
-    display_name: r.display_name ?? "",
-    email: (r.email ?? "").trim().toLowerCase(),
-    role: oneOf(r.role, ["player", "admin"] as const, "player"),
-    active: r.active === undefined || r.active === "" ? true : bool(r.active),
-  }),
-  deck: (r: RawRow): Deck => ({
-    deck_id: r.deck_id ?? "",
-    owner_player_id: r.owner_player_id ?? "",
-    name: r.name ?? "",
-    colors: r.colors ?? "",
-    bracket: r.bracket ?? "",
-    notes: r.notes ?? "",
-    commander_status: oneOf(r.commander_status, ["resolved", "unresolved", "none"] as const, "none"),
-    active: r.active === undefined || r.active === "" ? true : bool(r.active),
-  }),
-  deckCommander: (r: RawRow): DeckCommander => ({
-    deck_id: r.deck_id ?? "",
-    slot: int(r.slot, 1),
-    role: oneOf(r.role, ["commander", "partner", "companion"] as const, "commander"),
-    scryfall_oracle_id: r.scryfall_oracle_id ?? "",
-    card_name: r.card_name ?? "",
-    typed_name: r.typed_name ?? "",
-  }),
-  game: (r: RawRow): Game => ({
-    game_id: r.game_id ?? "",
-    day_game_no: int(r.day_game_no, 1),
-    date: r.date ?? "",
-    status: oneOf(r.status, ["pending", "approved", "rejected"] as const, "pending"),
-    result: oneOf(r.result, ["won", "draw", "unfinished"] as const, "won"),
-    brackets: splitList(r.brackets),
-    win_conditions: splitList(r.win_conditions),
-    additional_rules: splitList(r.additional_rules),
-    notes: r.notes ?? "",
-    submitted_by: r.submitted_by ?? "",
-    approved_by: r.approved_by ?? "",
-    rev: int(r.rev, 1),
-    reject_reason: r.reject_reason ?? "",
-  }),
-  seat: (r: RawRow): GameSeat => ({
-    game_id: r.game_id ?? "",
-    seat: int(r.seat, 1),
-    player_id: r.player_id ?? "",
-    deck_id: r.deck_id ?? "",
-    is_winner: bool(r.is_winner),
-  }),
-  lookup: (r: RawRow): Lookup => ({ id: r.id ?? "", name: r.name ?? "" }),
-};
-
-const s = (v: unknown) => (v === undefined || v === null ? "" : String(v));
-
-export const serialize = {
-  player: (p: Player): RawRow => ({ ...p, active: s(p.active) }),
-  deck: (d: Deck): RawRow => ({ ...d, active: s(d.active) }),
-  deckCommander: (c: DeckCommander): RawRow => ({ ...c, slot: s(c.slot) }),
-  game: (g: Game): RawRow => ({
-    ...g,
-    day_game_no: s(g.day_game_no),
-    rev: s(g.rev),
-    brackets: joinList(g.brackets),
-    win_conditions: joinList(g.win_conditions),
-    additional_rules: joinList(g.additional_rules),
-  }),
-  seat: (x: GameSeat): RawRow => ({ ...x, seat: s(x.seat), is_winner: s(x.is_winner) }),
-  lookup: (l: Lookup): RawRow => ({ ...l }),
-};
 
 export const COLOR_ORDER = ["W", "U", "B", "R", "G"] as const;
 

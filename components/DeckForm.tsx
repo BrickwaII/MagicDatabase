@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { saveDeck } from "@/app/actions";
-import { BRACKETS, COLOR_ORDER, type DeckCommander, type Player } from "@/lib/schema";
+import { BRACKETS, COLOR_ORDER, LIST_URL_MAX, type DeckCommander, type PlayerOption } from "@/lib/schema";
 import {
   byOracleId,
   canPair,
@@ -167,7 +167,7 @@ function SlotEditor({
 }
 
 interface Props {
-  players: Player[];
+  players: PlayerOption[];
   meId: string;
   admin: boolean;
   deckId?: string;
@@ -178,6 +178,7 @@ interface Props {
     bracket: string;
     notes: string;
     active: boolean;
+    list_url: string;
     commanders: DeckCommander[];
   };
 }
@@ -190,6 +191,7 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
   const [name, setName] = useState(initial?.name ?? "");
   const [bracket, setBracket] = useState(initial?.bracket ?? "");
   const [notes, setNotes] = useState(initial?.notes ?? "");
+  const [listUrl, setListUrl] = useState(initial?.list_url ?? "");
   const [active, setActive] = useState(initial?.active ?? true);
   const [manualColors, setManualColors] = useState(initial?.colors ?? "");
   const cmds = initial?.commanders ?? [];
@@ -250,10 +252,10 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
       const res = await saveDeck({
         id: deckId,
         active,
-        input: { owner_player_id: owner, name, colors, bracket: bracket as never, notes, commanders },
+        input: { owner_player_id: owner, name, colors, bracket: bracket as never, notes, commanders, list_url: listUrl },
       });
       if (res.ok) {
-        router.push("/decks");
+        router.push(`/decks/${res.id}`);
         router.refresh();
       } else setError(res.error);
     });
@@ -262,7 +264,7 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
   return (
     <form className="stack" onSubmit={submit}>
       <div className="card stack">
-        <div className="row">
+        <div className="deck-top">
           {admin && (
             <label>
               <span className="lbl">Owner</span>
@@ -275,7 +277,7 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
               </select>
             </label>
           )}
-          <label style={{ flex: 1 }}>
+          <label className="deck-top-name">
             <span className="lbl">Deck nickname</span>
             <input value={name} onChange={(e) => setName(e.target.value)} required style={{ width: "100%" }} placeholder="e.g. Tifa" />
           </label>
@@ -340,6 +342,7 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
                 <label key={c} className={`chip${on ? " on" : ""}`}>
                   <input
                     type="checkbox"
+                    className="sr-only"
                     checked={on}
                     onChange={() =>
                       setManualColors((m) =>
@@ -356,12 +359,26 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
       </fieldset>
 
       <label className="card">
+        <span className="lbl">Deck list link (optional)</span>
+        <input
+          type="url"
+          inputMode="url"
+          value={listUrl}
+          onChange={(e) => setListUrl(e.target.value)}
+          maxLength={LIST_URL_MAX}
+          placeholder="https://moxfield.com/decks/… or Archidekt, any site"
+          autoComplete="off"
+          style={{ width: "100%" }}
+        />
+      </label>
+
+      <label className="card">
         <span className="lbl">Notes</span>
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
       </label>
 
       {deckId && (
-        <label className="row">
+        <label className="check">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
           Active (uncheck to retire the deck; its games keep counting)
         </label>
@@ -369,9 +386,13 @@ export function DeckForm({ players, meId, admin, deckId, initial }: Props) {
       {!resolved && hasSlot(first) && (
         <p className="small notice">This deck will be saved as unresolved; an admin can link the real card later.</p>
       )}
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
       <div>
-        <button className="primary" disabled={pending}>
+        <button className={`primary big${pending ? " is-pending" : ""}`} disabled={pending} aria-busy={pending}>
           {pending ? "Saving…" : deckId ? "Save deck" : "Add deck"}
         </button>
       </div>

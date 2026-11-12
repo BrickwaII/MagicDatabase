@@ -3,12 +3,28 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { saveGame } from "@/app/actions";
-import { BRACKETS, GUEST_PLAYER_ID, MAX_SEATS, MIN_SEATS, type Deck, type GameResult, type Lookup, type Player } from "@/lib/schema";
+import { CloseIcon, CrownIcon, DownIcon, UpIcon } from "./Icons";
+import {
+  BRACKETS,
+  GUEST_DECK_MAX,
+  GUEST_NAME_MAX,
+  GUEST_PLAYER_ID,
+  MAX_SEATS,
+  MIN_SEATS,
+  type Deck,
+  type GameResult,
+  type Lookup,
+  type PlayerOption,
+} from "@/lib/schema";
 
 interface SeatState {
   player_id: string;
   deck_id: string;
   is_winner: boolean;
+  /** Guest seats only. */
+  guest_name: string;
+  guest_deck: string;
+  guest_added_by: string;
 }
 
 export interface GameFormInitial {
@@ -18,11 +34,11 @@ export interface GameFormInitial {
   win_conditions: string[];
   additional_rules: string[];
   notes: string;
-  seats: SeatState[];
+  seats: (Pick<SeatState, "player_id" | "deck_id" | "is_winner"> & Partial<SeatState>)[];
 }
 
 interface Props {
-  players: Player[];
+  players: PlayerOption[];
   decks: Deck[];
   winConditions: Lookup[];
   rules: Lookup[];
@@ -34,7 +50,7 @@ interface Props {
   saveNote?: string;
 }
 
-const emptySeat = (): SeatState => ({ player_id: "", deck_id: "", is_winner: false });
+const emptySeat = (): SeatState => ({ player_id: "", deck_id: "", is_winner: false, guest_name: "", guest_deck: "", guest_added_by: "" });
 
 function localToday() {
   const d = new Date();
@@ -56,7 +72,14 @@ export function GameForm({ players, decks, winConditions, rules, meId, gameId, r
   const [ruleIds, setRuleIds] = useState<string[]>(initial?.additional_rules ?? []);
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [seats, setSeats] = useState<SeatState[]>(
-    initial?.seats ?? [{ player_id: meId, deck_id: "", is_winner: false }, emptySeat(), emptySeat(), emptySeat()],
+    initial?.seats.map((s) => ({
+      player_id: s.player_id,
+      deck_id: s.deck_id,
+      is_winner: s.is_winner,
+      guest_name: s.guest_name ?? "",
+      guest_deck: s.guest_deck ?? "",
+      guest_added_by: s.guest_added_by ?? "",
+    })) ?? [{ ...emptySeat(), player_id: meId }, emptySeat(), emptySeat(), emptySeat()],
   );
 
   useEffect(() => {
@@ -99,169 +122,281 @@ export function GameForm({ players, decks, winConditions, rules, meId, gameId, r
     });
   }
 
+  const winnerNames =
+    result === "won"
+      ? seats
+          .filter((s) => s.is_winner && s.player_id)
+          .map((s) => (s.player_id === GUEST_PLAYER_ID ? (s.guest_name.trim() ? `Guest · ${s.guest_name.trim()}` : "Guest") : playerName(s.player_id)))
+      : [];
+  const resultOptions: { value: GameResult; label: string }[] = [
+    { value: "won", label: "Won" },
+    { value: "draw", label: "Draw" },
+    { value: "unfinished", label: "Unfinished" },
+  ];
+
   return (
-    <form className="stack" onSubmit={submit}>
-      <div className="card row">
-        <label>
+    <form className="game-form" onSubmit={submit}>
+      <section className="card form-top">
+        <label className="field">
           <span className="lbl">Date</span>
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
         </label>
-        <label>
-          <span className="lbl">Result</span>
-          <select value={result} onChange={(e) => setResult(e.target.value as GameResult)}>
-            <option value="won">Someone won</option>
-            <option value="draw">Draw</option>
-            <option value="unfinished">Unfinished</option>
-          </select>
-        </label>
-        {result !== "won" && <span className="small muted">Draws and unfinished games are saved but not counted in stats.</span>}
-      </div>
+        <div className="field">
+          <span className="lbl" id="result-label">
+            Result
+          </span>
+          <div className="seg" role="radiogroup" aria-labelledby="result-label">
+            {resultOptions.map((o) => (
+              <label key={o.value} className={`seg-opt${result === o.value ? " on" : ""}`}>
+                <input
+                  type="radio"
+                  name="result-choice"
+                  value={o.value}
+                  checked={result === o.value}
+                  onChange={() => setResult(o.value)}
+                  className="sr-only"
+                />
+                {o.label}
+              </label>
+            ))}
+          </div>
+        </div>
+        {result !== "won" && <p className="small muted field-wide">Draws and unfinished games are saved but not counted in stats.</p>}
+      </section>
 
-      <fieldset className="card">
-        <legend>Seats, in turn order</legend>
-        <div className="stack">
+      <section className="form-section" aria-labelledby="seats-h">
+        <div className="section-head">
+          <h2 id="seats-h">Seats</h2>
+          <span className="small muted">In turn order. Seat 1 went first.</span>
+        </div>
+        <ol className="seat-list">
           {seats.map((s, i) => {
             const guest = s.player_id === GUEST_PLAYER_ID;
             const own = decksByOwner.get(s.player_id) ?? [];
             const others = decks.filter((d) => d.owner_player_id !== s.player_id);
+            const won = s.is_winner && result === "won";
             return (
-              <div key={i} className="seat-edit">
-                <strong className="muted n">{i + 1}</strong>
-                <select
-                  className="player"
-                  aria-label={`Seat ${i + 1} player`}
-                  value={s.player_id}
-                  onChange={(e) => setSeat(i, { player_id: e.target.value, deck_id: "" })}
-                  required
-                >
-                  <option value="">Player…</option>
-                  {players.map((p) => (
-                    <option key={p.player_id} value={p.player_id} disabled={takenIds.has(p.player_id) && p.player_id !== s.player_id}>
-                      {p.display_name}
-                    </option>
-                  ))}
-                  <option value={GUEST_PLAYER_ID}>Guest (untracked)</option>
-                </select>
-                <select
-                  className="deck"
-                  aria-label={`Seat ${i + 1} deck`}
-                  value={s.deck_id}
-                  onChange={(e) => setSeat(i, { deck_id: e.target.value })}
-                  disabled={guest || !s.player_id}
-                  required={!guest}
-                >
-                  <option value="">{guest ? "—" : "Deck…"}</option>
-                  {own.length > 0 && (
-                    <optgroup label={`${playerName(s.player_id)}'s decks`}>
-                      {own.map((d) => (
-                        <option key={d.deck_id} value={d.deck_id}>
-                          {d.name} ({d.colors})
+              <li key={i} className={`seat-card${won ? " won" : ""}`}>
+                <div className="seat-card-head">
+                  <span className="seat-num">Seat {i + 1}</span>
+                  <span className="moves">
+                    <button type="button" className="icon-btn" onClick={() => move(i, -1)} disabled={i === 0} aria-label={`Move seat ${i + 1} up`}>
+                      <UpIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => move(i, 1)}
+                      disabled={i === seats.length - 1}
+                      aria-label={`Move seat ${i + 1} down`}
+                    >
+                      <DownIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn danger"
+                      onClick={() => setSeats((x) => x.filter((_, j) => j !== i))}
+                      disabled={seats.length <= MIN_SEATS}
+                      aria-label={`Remove seat ${i + 1}`}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </span>
+                </div>
+                <div className="seat-card-body">
+                  <div className="seat-selects">
+                    <select
+                      className="player"
+                      aria-label={`Seat ${i + 1} player`}
+                      value={s.player_id}
+                      onChange={(e) => {
+                        const player_id = e.target.value;
+                        // A new guest defaults to being brought by whoever is logging the game.
+                        const host = player_id === GUEST_PLAYER_ID && !s.guest_added_by ? { guest_added_by: meId } : {};
+                        setSeat(i, { player_id, deck_id: "", ...host });
+                      }}
+                      required
+                    >
+                      <option value="">Player…</option>
+                      {players.map((p) => (
+                        <option key={p.player_id} value={p.player_id} disabled={takenIds.has(p.player_id) && p.player_id !== s.player_id}>
+                          {p.display_name}
                         </option>
                       ))}
-                    </optgroup>
-                  )}
-                  {others.length > 0 && !guest && (
-                    <optgroup label="Borrowed">
-                      {others.map((d) => (
-                        <option key={d.deck_id} value={d.deck_id}>
-                          {d.name} ({playerName(d.owner_player_id)})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-                <label className={`chip win${s.is_winner ? " on" : ""}`} style={{ opacity: result === "won" ? 1 : 0.4 }}>
-                  <input
-                    type="checkbox"
-                    checked={s.is_winner && result === "won"}
-                    disabled={result !== "won"}
-                    onChange={(e) => setSeat(i, { is_winner: e.target.checked })}
-                  />
-                  Won
-                </label>
-                <span className="moves">
-                  <button type="button" onClick={() => move(i, -1)} disabled={i === 0} aria-label="Move up">
-                    ↑
-                  </button>
-                  <button type="button" onClick={() => move(i, 1)} disabled={i === seats.length - 1} aria-label="Move down">
-                    ↓
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    onClick={() => setSeats((x) => x.filter((_, j) => j !== i))}
-                    disabled={seats.length <= MIN_SEATS}
-                    aria-label="Remove seat"
-                  >
-                    ✕
-                  </button>
-                </span>
-              </div>
+                      <option value={GUEST_PLAYER_ID}>Guest (untracked)</option>
+                    </select>
+                    <select
+                      className="deck"
+                      aria-label={`Seat ${i + 1} deck`}
+                      value={s.deck_id}
+                      onChange={(e) => setSeat(i, { deck_id: e.target.value })}
+                      disabled={guest || !s.player_id}
+                      required={!guest}
+                    >
+                      <option value="">{guest ? "No deck for guests" : s.player_id ? "Deck…" : "Pick a player first"}</option>
+                      {own.length > 0 && (
+                        <optgroup label={`${playerName(s.player_id)}'s decks`}>
+                          {own.map((d) => (
+                            <option key={d.deck_id} value={d.deck_id}>
+                              {d.name} ({d.colors})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {others.length > 0 && !guest && (
+                        <optgroup label="Borrowed">
+                          {others.map((d) => (
+                            <option key={d.deck_id} value={d.deck_id}>
+                              {d.name} ({playerName(d.owner_player_id)})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                  </div>
+                  <label className={`win-toggle${won ? " on" : ""}${result !== "won" ? " off" : ""}`}>
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={won}
+                      disabled={result !== "won"}
+                      onChange={(e) => setSeat(i, { is_winner: e.target.checked })}
+                    />
+                    <CrownIcon size={20} />
+                    <span>{won ? "Winner" : "Won?"}</span>
+                  </label>
+                </div>
+                {guest && (
+                  <div className="guest-fields">
+                    <label>
+                      <span className="lbl">Guest name</span>
+                      <input
+                        value={s.guest_name}
+                        onChange={(e) => setSeat(i, { guest_name: e.target.value })}
+                        maxLength={GUEST_NAME_MAX}
+                        placeholder="e.g. Alex"
+                        autoComplete="off"
+                        aria-label={`Seat ${i + 1} guest name`}
+                      />
+                    </label>
+                    <label>
+                      <span className="lbl">Their deck</span>
+                      <input
+                        value={s.guest_deck}
+                        onChange={(e) => setSeat(i, { guest_deck: e.target.value })}
+                        maxLength={GUEST_DECK_MAX}
+                        placeholder="e.g. Yuriko"
+                        autoComplete="off"
+                        aria-label={`Seat ${i + 1} guest deck`}
+                      />
+                    </label>
+                    <label className="guest-host">
+                      <span className="lbl">Brought by</span>
+                      <select
+                        value={s.guest_added_by}
+                        onChange={(e) => setSeat(i, { guest_added_by: e.target.value })}
+                        aria-label={`Seat ${i + 1} guest brought by`}
+                      >
+                        <option value="">Not recorded</option>
+                        {players.map((p) => (
+                          <option key={p.player_id} value={p.player_id}>
+                            {p.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <span className="small muted guest-hint">Optional. Never shown on the public stats page.</span>
+                  </div>
+                )}
+              </li>
             );
           })}
-          {seats.length < MAX_SEATS && (
-            <button type="button" onClick={() => setSeats((s) => [...s, emptySeat()])}>
-              + Add seat
-            </button>
-          )}
-        </div>
-      </fieldset>
+        </ol>
+        {seats.length < MAX_SEATS && (
+          <button type="button" className="add-seat" onClick={() => setSeats((s) => [...s, emptySeat()])}>
+            + Add seat {seats.length + 1}
+          </button>
+        )}
+      </section>
 
-      <fieldset className="card stack">
-        <legend>Details</legend>
-        <div>
-          <span className="lbl small muted">Brackets</span>
-          <div className="chips">
-            {BRACKETS.map((b) => (
-              <label key={b} className={`chip${brackets.includes(b) ? " on" : ""}`}>
-                <input type="checkbox" checked={brackets.includes(b)} onChange={() => setBrackets((x) => toggle(x, b))} />
-                {b}
-              </label>
-            ))}
-          </div>
+      <section className="form-section" aria-labelledby="details-h">
+        <div className="section-head">
+          <h2 id="details-h">Details</h2>
+          <span className="small muted">Optional</span>
         </div>
-        {result === "won" && (
+        <div className="card stack">
           <div>
-            <span className="lbl small muted">Win conditions</span>
+            <span className="lbl">Bracket</span>
             <div className="chips">
-              {winConditions.map((w) => (
-                <label key={w.id} className={`chip${wcs.includes(w.id) ? " on" : ""}`}>
-                  <input type="checkbox" checked={wcs.includes(w.id)} onChange={() => setWcs((x) => toggle(x, w.id))} />
-                  {w.name}
+              {BRACKETS.map((b) => (
+                <label key={b} className={`chip chip-num${brackets.includes(b) ? " on" : ""}`}>
+                  <input type="checkbox" className="sr-only" checked={brackets.includes(b)} onChange={() => setBrackets((x) => toggle(x, b))} />
+                  {b}
                 </label>
               ))}
-              {winConditions.length === 0 && <span className="small muted">None set up yet.</span>}
             </div>
           </div>
-        )}
-        <div>
-          <span className="lbl small muted">Additional rules</span>
-          <div className="chips">
-            {rules.map((r) => (
-              <label key={r.id} className={`chip${ruleIds.includes(r.id) ? " on" : ""}`}>
-                <input type="checkbox" checked={ruleIds.includes(r.id)} onChange={() => setRuleIds((x) => toggle(x, r.id))} />
-                {r.name}
-              </label>
-            ))}
-            {rules.length === 0 && <span className="small muted">None set up yet.</span>}
+          {result === "won" && (
+            <div>
+              <span className="lbl">How it was won</span>
+              <div className="chips">
+                {winConditions.map((w) => (
+                  <label key={w.id} className={`chip${wcs.includes(w.id) ? " on" : ""}`}>
+                    <input type="checkbox" className="sr-only" checked={wcs.includes(w.id)} onChange={() => setWcs((x) => toggle(x, w.id))} />
+                    {w.name}
+                  </label>
+                ))}
+                {winConditions.length === 0 && <span className="small muted">None set up yet.</span>}
+              </div>
+            </div>
+          )}
+          <div>
+            <span className="lbl">Extra rules in play</span>
+            <div className="chips">
+              {rules.map((r) => (
+                <label key={r.id} className={`chip${ruleIds.includes(r.id) ? " on" : ""}`}>
+                  <input type="checkbox" className="sr-only" checked={ruleIds.includes(r.id)} onChange={() => setRuleIds((x) => toggle(x, r.id))} />
+                  {r.name}
+                </label>
+              ))}
+              {rules.length === 0 && <span className="small muted">None set up yet.</span>}
+            </div>
           </div>
+          <label>
+            <span className="lbl">Notes</span>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Anything worth remembering. For swap-commander decks, note which commanders were played."
+            />
+          </label>
         </div>
-        <label>
-          <span className="lbl">Notes</span>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Anything worth remembering. For swap-commander decks, note which commanders were played."
-          />
-        </label>
-      </fieldset>
+      </section>
 
-      {error && <div className="error">{error}</div>}
       {saveNote && <p className="small muted">{saveNote}</p>}
-      <div className="row">
-        <button className="primary" type="submit" disabled={pending}>
-          {pending ? "Saving…" : gameId ? "Save changes" : "Submit game"}
-        </button>
+      <div className="submit-bar">
+        {error && (
+          <div className="error" role="alert">
+            {error}
+          </div>
+        )}
+        <div className="submit-row">
+          <span className="submit-summary small">
+            {result !== "won" ? (
+              <>{result === "draw" ? "Draw" : "Unfinished"}, not counted</>
+            ) : winnerNames.length ? (
+              <>
+                <CrownIcon size={14} /> {winnerNames.join(" & ")}
+              </>
+            ) : (
+              <span className="muted">No winner picked yet</span>
+            )}
+          </span>
+          <button className={`primary big${pending ? " is-pending" : ""}`} type="submit" disabled={pending} aria-busy={pending}>
+            {pending ? "Saving…" : gameId ? "Save changes" : "Save game"}
+          </button>
+        </div>
       </div>
     </form>
   );

@@ -1,25 +1,27 @@
 import Link from "next/link";
 import { saveLookupAction, savePlayerAction } from "@/app/actions";
+import { ShareAndExport } from "@/components/ShareAndExport";
+import { SubmitButton } from "@/components/SubmitButton";
 import { requireAdmin } from "@/lib/auth";
 import { listPlayers, listRules, listWinConditions } from "@/lib/data";
 import type { Lookup, Player } from "@/lib/schema";
 
 function PlayerRow({ p }: { p?: Player }) {
   return (
-    <form action={savePlayerAction} className="row" style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+    <form action={savePlayerAction} className="admin-row">
       {p && <input type="hidden" name="player_id" value={p.player_id} />}
-      <input name="display_name" defaultValue={p?.display_name} placeholder="Name" required style={{ width: 140 }} />
-      <input name="email" type="email" defaultValue={p?.email} placeholder="Google email" style={{ flex: 1, minWidth: 180 }} />
-      <select name="role" defaultValue={p?.role ?? "player"}>
+      <input name="display_name" defaultValue={p?.display_name} placeholder="Name" aria-label="Name" required />
+      <input name="email" type="email" inputMode="email" autoComplete="off" defaultValue={p?.email} placeholder="Google email" aria-label="Google email" />
+      <select name="role" defaultValue={p?.role ?? "player"} aria-label="Role">
         <option value="player">Player</option>
         <option value="admin">Admin</option>
       </select>
-      <label className="row small">
+      <label className="check small">
         <input type="checkbox" name="active" defaultChecked={p ? p.active : true} /> Active
       </label>
-      <button type="submit" className={p ? "" : "primary"}>
+      <SubmitButton className={p ? "" : "primary"} pendingText="Saving…">
         {p ? "Save" : "Add player"}
-      </button>
+      </SubmitButton>
     </form>
   );
 }
@@ -27,21 +29,21 @@ function PlayerRow({ p }: { p?: Player }) {
 function LookupList({ tab, title, items }: { tab: "WinConditions" | "Rules"; title: string; items: Lookup[] }) {
   return (
     <div className="card">
-      <h3 style={{ marginTop: 0 }}>{title}</h3>
+      <h2 style={{ marginTop: 0 }}>{title}</h2>
       {items.map((l) => (
-        <form key={l.id} action={saveLookupAction} className="row" style={{ marginBottom: 6 }}>
+        <form key={l.id} action={saveLookupAction} className="lookup-row">
           <input type="hidden" name="tab" value={tab} />
           <input type="hidden" name="id" value={l.id} />
-          <input name="name" defaultValue={l.name} required style={{ flex: 1 }} />
-          <button type="submit">Rename</button>
+          <input name="name" defaultValue={l.name} aria-label={`Rename ${l.name}`} required />
+          <SubmitButton pendingText="Saving…">Rename</SubmitButton>
         </form>
       ))}
-      <form action={saveLookupAction} className="row" style={{ marginTop: 10 }}>
+      <form action={saveLookupAction} className="lookup-row" style={{ marginTop: 14 }}>
         <input type="hidden" name="tab" value={tab} />
-        <input name="name" placeholder="New…" required style={{ flex: 1 }} />
-        <button type="submit" className="primary">
+        <input name="name" placeholder="Add a new one" aria-label={`New ${title.toLowerCase()}`} required />
+        <SubmitButton className="primary" pendingText="Adding…">
           Add
-        </button>
+        </SubmitButton>
       </form>
     </div>
   );
@@ -53,13 +55,19 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
   const [players, wcs, rules] = await Promise.all([listPlayers({ includeInactive: true }), listWinConditions(), listRules()]);
   return (
     <div className="stack">
-      <div className="spread">
+      <div className="page-head">
         <h1>Admin</h1>
-        <Link href="/admin/audit">Audit log →</Link>
+        <Link className="btn" href="/admin/audit">
+          Audit log
+        </Link>
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>Players and invite list</h3>
+        <h2 style={{ marginTop: 0 }}>Players and invite list</h2>
         <p className="small muted">
           Anyone listed here with an email can sign in with that Google account. Admins skip the approval queue and can approve
           others&apos; games. Players without an email are tracked but can&apos;t sign in.
@@ -73,6 +81,7 @@ export default async function Admin({ searchParams }: { searchParams: Promise<{ 
         <LookupList tab="WinConditions" title="Win conditions" items={wcs} />
         <LookupList tab="Rules" title="Additional rules" items={rules} />
       </div>
+      <ShareAndExport />
     </div>
   );
 }

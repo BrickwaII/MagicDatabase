@@ -17,6 +17,7 @@ import {
   type DeckInput,
   type GameInput,
 } from "@/lib/data";
+import { createDeckVersion, deleteDeckVersion, updateDeckVersion, type VersionInput } from "@/lib/versions";
 
 export type ActionResult = { ok: true; id: string } | { ok: false; error: string };
 
@@ -41,9 +42,22 @@ export async function saveGame(payload: { id?: string; rev?: number; input: Game
   return res;
 }
 
+/** The rev the admin saw when the page was rendered (hidden "rev" field), if sent. */
+function formRev(formData: FormData): number | undefined {
+  const raw = formData.get("rev");
+  const n = Number(raw);
+  return raw !== null && raw !== "" && Number.isInteger(n) ? n : undefined;
+}
+
 export async function approveGameAction(formData: FormData) {
   const actor = await requireAdmin();
-  await approveGame(String(formData.get("id")), actor);
+  const id = String(formData.get("id"));
+  try {
+    await approveGame(id, actor, formRev(formData));
+  } catch (e) {
+    if (e instanceof AppError) redirect(`/queue?error=${encodeURIComponent(e.message)}#${id}`);
+    throw e;
+  }
   revalidatePath("/", "layout");
 }
 
@@ -52,7 +66,7 @@ export async function rejectGameAction(formData: FormData) {
   const id = String(formData.get("id"));
   const reason = String(formData.get("reason") ?? "");
   try {
-    await rejectGame(id, actor, reason);
+    await rejectGame(id, actor, reason, formRev(formData));
   } catch (e) {
     if (e instanceof AppError) redirect(`/queue?error=${encodeURIComponent(e.message)}#${id}`);
     throw e;
@@ -74,6 +88,27 @@ export async function saveDeck(payload: { id?: string; active?: boolean; input: 
       ? (await updateDeck(payload.id, { ...payload.input, active: payload.active }, actor)).deck_id
       : (await createDeck(payload.input, actor)).deck_id,
   );
+  if (res.ok) revalidatePath("/", "layout");
+  return res;
+}
+
+export async function saveDeckVersion(payload: { deckId: string; id?: string; input: VersionInput }): Promise<ActionResult> {
+  const actor = await requirePlayer();
+  const res = await attempt(async () =>
+    payload.id
+      ? (await updateDeckVersion(payload.deckId, payload.id, payload.input, actor)).id
+      : (await createDeckVersion(payload.deckId, payload.input, actor)).id,
+  );
+  if (res.ok) revalidatePath("/", "layout");
+  return res;
+}
+
+export async function removeDeckVersion(payload: { deckId: string; id: string }): Promise<ActionResult> {
+  const actor = await requirePlayer();
+  const res = await attempt(async () => {
+    await deleteDeckVersion(payload.deckId, payload.id, actor);
+    return payload.id;
+  });
   if (res.ok) revalidatePath("/", "layout");
   return res;
 }

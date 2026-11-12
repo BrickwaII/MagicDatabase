@@ -9,3 +9,9 @@ out/
 next-env.d.ts
 service-account*.json
 migration-report*.md
+
+# Claude agent worktrees
+.claude/
+
+# Old-sheet CSV exports used by npm run migrate (private data)
+old/

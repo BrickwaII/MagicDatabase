@@ -2,10 +2,12 @@ import { notFound } from "next/navigation";
 import { approveGameAction, deleteGameAction, rejectGameAction } from "@/app/actions";
 import { GameCard } from "@/components/GameCard";
 import { GameForm } from "@/components/GameForm";
+import { SubmitButton } from "@/components/SubmitButton";
 import { requirePlayer } from "@/lib/auth";
 import { getGame, listDecks, listPlayers, listRules, listWinConditions } from "@/lib/data";
 import { loadNames } from "@/lib/names";
 import { canEditGame, isAdmin } from "@/lib/permissions";
+import { playerOptions } from "@/lib/schema";
 
 export default async function GamePage({
   params,
@@ -25,7 +27,7 @@ export default async function GamePage({
 
   if (edit && editable) {
     // Keep players/decks that have since been deactivated so old games still edit cleanly.
-    const used = new Set(game.seats.flatMap((s) => [s.player_id, s.deck_id]));
+    const used = new Set(game.seats.flatMap((s) => [s.player_id, s.deck_id, s.guest_added_by]));
     const [players, decks, winConditions, rules] = await Promise.all([
       listPlayers({ includeInactive: true }).then((ps) => ps.filter((p) => p.active || used.has(p.player_id))),
       listDecks({ includeInactive: true }).then((ds) => ds.filter((d) => d.active || used.has(d.deck_id))),
@@ -33,10 +35,15 @@ export default async function GamePage({
       listRules(),
     ]);
     return (
-      <div className="stack">
-        <h1>Edit game</h1>
+      <div className="stack form-page">
+        <div className="page-head">
+          <h1>Edit game</h1>
+          <a className="btn" href={`/games/${id}`}>
+            Cancel
+          </a>
+        </div>
         <GameForm
-          players={players}
+          players={playerOptions(players)}
           decks={decks}
           winConditions={winConditions}
           rules={rules}
@@ -56,42 +63,54 @@ export default async function GamePage({
 
   return (
     <div className="stack">
-      <div className="spread">
-        <h1>Game</h1>
+      <div className="page-head">
+        <h1>Game details</h1>
         {editable && (
           <a className="btn" href={`/games/${id}?edit=1`}>
-            Edit
+            Edit game
           </a>
         )}
       </div>
-      <GameCard game={game} names={names} />
+      <GameCard game={game} names={names} detail />
       <p className="small muted">
-        Submitted by {names.players.get(game.submitted_by)?.display_name ?? game.submitted_by}
-        {game.approved_by && <> · approved by {names.players.get(game.approved_by)?.display_name ?? game.approved_by}</>}
+        Logged by {names.players.get(game.submitted_by)?.display_name ?? game.submitted_by}
+        {game.approved_by && <>, approved by {names.players.get(game.approved_by)?.display_name ?? game.approved_by}</>}.
       </p>
       {admin && (
-        <div className="card stack">
-          <h3 style={{ margin: 0 }}>Admin</h3>
+        <section className="card stack" aria-labelledby="admin-h">
+          <h2 id="admin-h" style={{ margin: 0 }}>
+            Admin
+          </h2>
           <div className="row">
             {game.status !== "approved" && (
               <form action={approveGameAction}>
                 <input type="hidden" name="id" value={id} />
-                <button className="primary">Approve</button>
+                <input type="hidden" name="rev" value={game.rev} />
+                <SubmitButton className="primary" pendingText="Approving…">
+                  Approve
+                </SubmitButton>
               </form>
             )}
             <form action={deleteGameAction}>
               <input type="hidden" name="id" value={id} />
-              <button className="danger">Delete game</button>
+              <SubmitButton className="danger" pendingText="Deleting…">
+                Delete game
+              </SubmitButton>
             </form>
           </div>
           {game.status !== "rejected" && (
-            <form action={rejectGameAction} className="row">
+            <form action={rejectGameAction} className="queue-actions">
               <input type="hidden" name="id" value={id} />
-              <input name="reason" placeholder="Reason for rejecting" required style={{ flex: 1 }} />
-              <button className="danger">Reject</button>
+              <input type="hidden" name="rev" value={game.rev} />
+              <div className="reject">
+                <input name="reason" placeholder="Reason for rejecting" aria-label="Reason for rejecting" required />
+                <SubmitButton className="danger" pendingText="Rejecting…">
+                  Reject
+                </SubmitButton>
+              </div>
             </form>
           )}
-        </div>
+        </section>
       )}
     </div>
   );
